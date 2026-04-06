@@ -1,0 +1,5 @@
+---
+- name: HandlerRun
+  ansible.builtin.debug:
+    msg: "Run handler"
+  listen: HandlerRun

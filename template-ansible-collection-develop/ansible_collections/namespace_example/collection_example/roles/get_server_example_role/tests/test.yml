@@ -1,0 +1,42 @@
+---
+- name: Playing with Ansible and Git
+  hosts: localhost
+  connection: local
+  pre_tasks:
+    - name: Delete content & directory
+      ansible.builtin.file:
+        state: absent
+        path: prueba.txt
+  tasks:
+    - name: Run role
+      ansible.builtin.include_role:
+        name: namespace_example.collection_example.get_server_example_role
+  post_tasks:
+    - name: Get cksum of my First file
+      ansible.builtin.stat:
+        path: "prueba.txt"
+      register: myfirstfile
+
+    - name: Current SHA1
+      ansible.builtin.set_fact:
+        mf1sha1: "{{ myfirstfile.stat.checksum }}"
+
+    - name: Get cksum of my Second File (If needed you can jump this)
+      ansible.builtin.stat:
+        path: "prueba-result.txt"
+      register: mysecondfile
+
+    - name: Current SHA1
+      ansible.builtin.set_fact:
+        mf2sha1: "{{ mysecondfile.stat.checksum }}"
+
+    - name: Compilation Changed
+      ansible.builtin.debug:
+        msg: "File Compare"
+
+    - name: Compilation Changed
+      ansible.builtin.debug:
+        msg: "File Compare"
+      failed_when: mf2sha1 != mf1sha1
+      delegate_to: localhost
+      become: false

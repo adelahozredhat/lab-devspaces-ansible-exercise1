@@ -1,0 +1,10 @@
+{
+    "docs": "https://docs.ansible.com/ansible-core/2.15/dev_guide/testing/sanity/yamllint.html", 
+    "results": [
+        {
+            "message": "The test `ansible-test sanity --test yamllint` [[explain](https://docs.ansible.com/ansible-core/2.15/dev_guide/testing/sanity/yamllint.html)] failed with 2 errors:", 
+            "output": "roles/get_server_example_role/tests/test.yml:16:13: colons: too many spaces before colon\nroles/get_server_example_role/tests/test.yml:25:13: colons: too many spaces before colon"
+        }
+    ], 
+    "verified": false
+}

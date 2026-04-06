@@ -1,0 +1,10 @@
+{
+    "docs": "https://docs.ansible.com/ansible-core/2.15/dev_guide/testing/sanity/symlinks.html", 
+    "results": [
+        {
+            "message": "The test `ansible-test sanity --test symlinks` [[explain](https://docs.ansible.com/ansible-core/2.15/dev_guide/testing/sanity/symlinks.html)] failed with 8 errors:", 
+            "output": "collections/ansible_collections/namespace_example/collection_example/.pytest_cache:0:0: broken symlinks are not allowed\ncollections/ansible_collections/namespace_example/collection_example/changelogs/:0:0: symlinks to directories are not allowed\ncollections/ansible_collections/namespace_example/collection_example/docs/:0:0: symlinks to directories are not allowed\ncollections/ansible_collections/namespace_example/collection_example/meta/:0:0: symlinks to directories are not allowed\ncollections/ansible_collections/namespace_example/collection_example/playbooks/:0:0: symlinks to directories are not allowed\ncollections/ansible_collections/namespace_example/collection_example/plugins/:0:0: symlinks to directories are not allowed\ncollections/ansible_collections/namespace_example/collection_example/roles/:0:0: symlinks to directories are not allowed\ncollections/ansible_collections/namespace_example/collection_example/tests/:0:0: symlinks to directories are not allowed"
+        }
+    ], 
+    "verified": false
+}

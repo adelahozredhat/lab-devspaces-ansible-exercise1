@@ -1,0 +1,23 @@
+---
+objects:
+  role: {}
+plugins:
+  become: {}
+  cache: {}
+  callback: {}
+  cliconf: {}
+  connection: {}
+  httpapi: {}
+  inventory: {}
+  lookup: {}
+  module:
+    get_servers:
+      description: Module to get a server list owned by one or more technical group
+      name: get_servers
+      namespace: ''
+      version_added: 1.0.0
+  netconf: {}
+  shell: {}
+  strategy: {}
+  vars: {}
+version: 1.0.0

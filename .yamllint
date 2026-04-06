@@ -1,37 +1,36 @@
 ---
-# Based on ansible-lint config
-extends: default
+yaml-files:
+  - '*.yaml'
+  - '*.yml'
+  - '.yamllint'
 
 rules:
-  braces:
-    max-spaces-inside: 1
-    level: error
-  brackets:
-    max-spaces-inside: 1
-    level: error
-  colons:
-    max-spaces-after: -1
-    level: error
-  commas:
-    max-spaces-after: -1
-    level: error
+  anchors: enable
+  braces: enable
+  brackets: enable
+  colons: enable
+  commas: enable
   comments:
-    min-spaces-from-content: 1
-  comments-indentation: false
-  octal-values:
-    forbid-implicit-octal: true
-    forbid-explicit-octal: true
-  document-start: disable
-  empty-lines:
-    max: 3
-    level: error
-  hyphens:
-    level: error
+    level: warning
+  comments-indentation:
+    level: warning
+  document-end: disable
+  document-start:
+    level: warning
+  empty-lines: enable
+  empty-values: disable
+  float-values: disable
+  hyphens: enable
   indentation: enable
   key-duplicates: enable
-  line-length: disable
+  key-ordering: disable
+  line-length:
+    level: warning
+    allow-non-breakable-inline-mappings: true
   new-line-at-end-of-file: enable
-  new-lines:
-    type: unix
+  new-lines: enable
+  octal-values: disable
+  quoted-strings: disable
   trailing-spaces: enable
-  truthy: enable
+  truthy:
+    level: warning

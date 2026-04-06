@@ -1,0 +1,28 @@
+{
+    "targets": {
+        "get_server": {
+            "aliases": [
+                "context//", 
+                "context//get_server", 
+                "context/target/", 
+                "context/target/get_server", 
+                "context/unknown/", 
+                "context/unknown/get_server", 
+                "get_server", 
+                "non_destructive/", 
+                "non_destructive/get_server", 
+                "non_module/", 
+                "non_module/get_server", 
+                "posix/", 
+                "role/", 
+                "role/get_server"
+            ], 
+            "modules": [], 
+            "name": "get_server", 
+            "run_time_seconds": 21, 
+            "setup_always": [], 
+            "setup_once": [], 
+            "type": "role"
+        }
+    }
+}

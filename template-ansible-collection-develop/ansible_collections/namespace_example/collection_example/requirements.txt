@@ -1,0 +1,15 @@
+pip==21.0.1
+setuptools==53.0.0
+setuptools_rust
+requests==2.25.1
+pylint==2.6.2
+pytest==6.2.2
+pytest-mock==3.5.1
+pytest-html==3.1.1
+pytest-cov==2.11.1
+pylint-json2html==0.2.0
+ansible==2.10.7
+ansible_base==2.10.5
+cryptography==3.4.4
+mock==4.0.3
+antsibull-changelog=0.12.0

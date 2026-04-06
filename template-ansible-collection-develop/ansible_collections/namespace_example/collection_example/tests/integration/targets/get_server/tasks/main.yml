@@ -1,0 +1,14 @@
+---
+- name: "Example get information"
+  namespace_example.collection_example.get_servers:
+    username: "{{ example_username }}"
+    password: "{{ example_password }}"
+    url: "{{ example_url }}"
+    proxy: "{{ example_proxy }}"
+    techgroups: "{{ example_techgroups }}"
+    environment: "{{ example_environment }}"
+  register: info_servers
+
+- name: "Debug info"
+  ansible.builtin.debug:
+    msg: "{{ info_servers }}"

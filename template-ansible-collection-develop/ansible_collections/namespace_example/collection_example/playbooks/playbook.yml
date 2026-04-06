@@ -1,0 +1,8 @@
+---
+- name: Playing with Ansible and Git
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Add Execution Role
+      ansible.builtin.include_role:
+        name: namespace_example.collection_example.get_server_example_role

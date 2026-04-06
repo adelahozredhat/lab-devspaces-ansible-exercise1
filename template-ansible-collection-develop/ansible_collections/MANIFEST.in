@@ -1,0 +1,2 @@
+include *
+recursive-include namespace_example *
