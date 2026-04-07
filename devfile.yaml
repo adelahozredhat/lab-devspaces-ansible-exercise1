@@ -13,6 +13,6 @@ components:
       args: ['tail', '-f', '/dev/null']
       env:
         - name: 'ANSIBLE_COLLECTIONS_PATH'
-          value: '~/.ansible/collections:/usr/share/ansible/collections:/projects/ansible-devspaces-demo/collections'
+          value: '~/.ansible/collections'
         - name: 'KUBEDOCK_ENABLED'
           value: "true"
