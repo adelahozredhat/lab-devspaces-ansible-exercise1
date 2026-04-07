@@ -61,9 +61,10 @@ Todos los comandos siguientes deben ejecutarse **desde el directorio raíz de la
 
 ```bash
 cd template-ansible-collection-develop/ansible_collections/namespace_example/collection_example
+ansible-galaxy collection install . -p ~/.ansible/collections --force
 ```
 
-Ajusta la versión de Python (`3.9`, `3.11`, etc.) a la disponible en el contenedor. El flag `--requirements` instala dependencias de test cuando haga falta.
+Ajusta la versión de Python (`3.11`, etc.) a la disponible en el contenedor. El flag `--requirements` instala dependencias de test cuando haga falta.
 
 ### Sanidad (`sanity`)
 
@@ -91,12 +92,6 @@ La colección declara en **`tests/unit/requirements.txt`** la dependencia **`req
 
 ```bash
 ansible-test units --venv --python 3.11 --requirements --coverage
-```
-
-Desde la raíz del repo del laboratorio (ajusta la ruta a tu clon):
-
-```bash
-bash scripts/run-ansible-test-units.sh --python 3.11 --requirements --coverage
 ```
 
 ### Pruebas de integración (`integration`)
