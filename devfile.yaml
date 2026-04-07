@@ -1,4 +1,5 @@
 # cspell: disable=devspaces
+# Para units en esta imagen: usar "ansible-test units --venv ..." (venv sin pytest-ansible del sistema).
 schemaVersion: 2.2.2
 metadata:
   name: ansible-demo

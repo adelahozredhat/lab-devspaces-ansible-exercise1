@@ -1,0 +1,3 @@
+# Instalado por ansible-test en el venv de units (--venv). Sin requests, haiinv.py usa el stub
+# "class Haiinv: pass" y los tests fallan.
+requests>=2.25.0,<3

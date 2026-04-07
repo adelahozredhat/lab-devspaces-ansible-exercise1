@@ -81,10 +81,22 @@ ansible-test sanity -v --python 3.11 --requirements --exclude tests/output/
 
 ### Pruebas unitarias (`units`)
 
-Ejecuta los tests Python bajo `tests/unit/` (módulo `get_servers` y `module_utils`):
+Ejecuta los tests Python bajo `tests/unit/` (módulo `get_servers` y `module_utils`).
+
+En la imagen **ansible-devspaces**, el Python del sistema trae **pytest-ansible**, que rompe `ansible-test units` (rutas de colección con `:`). Además `ansible-test` **no reenvía** `PYTEST_ADDOPTS` al subproceso de pytest, y desinstalar paquetes del sistema a menudo falla (sin pip en `/usr/bin/python3` o sin permisos).
+
+**Solución recomendada:** usar **`--venv`**. `ansible-test` crea un virtualenv e instala solo las dependencias de `units` (pytest, xdist, mock, etc.); ahí **no** entra pytest-ansible de la imagen.
+
+La colección declara en **`tests/unit/requirements.txt`** la dependencia **`requests`**: sin ella, `plugins/module_utils/haiinv.py` carga un stub vacío (`class Haiinv: pass`) y los tests del módulo fallan.
 
 ```bash
-ansible-test units --python 3.11 --requirements --coverage
+ansible-test units --venv --python 3.11 --requirements --coverage
+```
+
+Desde la raíz del repo del laboratorio (ajusta la ruta a tu clon):
+
+```bash
+bash scripts/run-ansible-test-units.sh --python 3.11 --requirements --coverage
 ```
 
 ### Pruebas de integración (`integration`)
