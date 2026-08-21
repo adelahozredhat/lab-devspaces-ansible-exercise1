@@ -1,4 +1,4 @@
-# lab-devspaces-ansible-exercise2
+# lab-devspaces-ansible-exercise1
 
 Curso práctico de desarrollo de playbooks Ansible. El fichero de referencia `deploy-wildfly.yaml` muestra el resultado objetivo; este documento sirve como guía para construirlo, refactorizarlo y validarlo con herramientas de calidad.
 
