@@ -1,0 +1,10 @@
+---
+- name: Create (delegated — la VM de laboratorio ya existe)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Confirmar que no se crea una VM nueva
+      ansible.builtin.debug:
+        msg: >-
+          Driver default (delegated) con managed=false.
+          Se reutiliza la instancia {{ molecule_yml.platforms[0].name }} del laboratorio.

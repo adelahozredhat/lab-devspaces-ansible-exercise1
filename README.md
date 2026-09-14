@@ -20,7 +20,7 @@ ansible-galaxy collection install community.general
 El playbook automatiza una instalación de **WildFly 39** alineada con la documentación oficial del producto. En una sola corrida sobre el grupo de inventario `servers` (con privilegios elevados):
 
 1. **Define variables** de versión, rutas de instalación, usuario y grupo del servicio, y la URL de descarga del tarball oficial.
-2. **Prepara el sistema operativo** instalando Java 21 (requisito para WildFly 39) y utilidades necesarias para descomprimir el paquete.
+2. **Prepara el sistema operativo** instalando un JDK 17 o superior (requisito de WildFly 39) y utilidades necesarias para descomprimir el paquete. En las VM Fedora 44 del laboratorio el paquete es `java-25-openjdk-devel` (`java-21-openjdk-devel` ya no está en los repos).
 3. **Crea identidad de servicio**: grupo y usuario de sistema dedicados, con home en el directorio de instalación y shell restrictivo.
 4. **Descarga e instala** el WildFly desde GitHub en `/opt`, evitando repetir la extracción si ya existe el indicador de instalación previsto.
 5. **Normaliza la ruta de trabajo** mediante un enlace simbólico desde `/opt/wildfly-<versión>` hacia `/opt/wildfly`, de modo que scripts y servicios apunten a una ruta estable.
@@ -80,6 +80,7 @@ Declara al menos: versión de WildFly, directorio de instalación lógico (`/opt
     wf_user: "wildfly"
     wf_group: "wildfly"
     wf_url: "https://github.com/wildfly/wildfly/releases/download/{{ wf_version }}/wildfly-{{ wf_version }}.tar.gz"
+    wf_java_package: java-25-openjdk-devel
 ```
 
 **Resultado en el nodo (ficheros / estado):** los pasos 1 y 2 no escriben nada en el objetivo; solo fijan el alcance del play y las variables en memoria durante la ejecución.
@@ -88,20 +89,20 @@ Declara al menos: versión de WildFly, directorio de instalación lógico (`/opt
 
 ### Paso 3 — Dependencias del sistema
 
-Primera tarea: instalar en el nodo objetivo el JDK adecuado (Java 21 para WildFly 39), más herramientas imprescindibles para manejar el archivo comprimido (por ejemplo `tar` y `gzip`).
+Primera tarea: instalar en el nodo objetivo el JDK adecuado (Java 17+ para WildFly 39; en Fedora 44 usa `java-25-openjdk-devel`), más herramientas imprescindibles para manejar el archivo comprimido (por ejemplo `tar` y `gzip`).
 
 ```yaml
   tasks:
     - name: Instalar dependencias (Java 17+ es requerido para WF 39)
       ansible.builtin.dnf:
         name:
-          - java-21-openjdk-devel
+          - "{{ wf_java_package }}"
           - tar
           - gzip
         state: present
 ```
 
-**Resultado en el nodo:** paquetes RPM instalados (`java-21-openjdk-devel`, `tar`, `gzip`); binarios disponibles en el PATH del sistema (`java`, `tar`, `gzip`).
+**Resultado en el nodo:** paquetes RPM instalados (`java-25-openjdk-devel` en Fedora 44, `tar`, `gzip`); binarios disponibles en el PATH del sistema (`java`, `tar`, `gzip`).
 
 **Resultado final del bloque (paso 3 — dependencias OS):** sistema preparado para descargar y desempaquetar WildFly y para ejecutar la JVM requerida.
 
@@ -150,7 +151,7 @@ Descarga el archivo desde la URL y descomprímelo bajo `/opt`, asignando propiet
         remote_src: yes
         owner: "{{ wf_user }}"
         group: "{{ wf_group }}"
-        creates: "{{ wf_install_dir }}/bin/standalone.sh"
+        creates: "/opt/wildfly-{{ wf_version }}/bin/standalone.sh"
 ```
 
 **Resultado final del bloque (paso 6 — extracción):** existe `/opt/wildfly-{{ wf_version }}/` (p. ej. `/opt/wildfly-39.0.1.Final/`) con el contenido del tarball, UID/GID `wildfly`. La ruta canónica `/opt/wildfly` puede no existir aún si esta es la primera instalación y el enlace se crea en pasos posteriores.
@@ -160,14 +161,22 @@ Descarga el archivo desde la URL y descomprímelo bajo `/opt`, asignando propiet
 Si tu diseño reutiliza siempre la misma ruta canónica (`/opt/wildfly`), incluye una tarea condicionada que elimine ese destino cuando no estés en modo check, de forma coherente con cómo quieres gestionar actualizaciones o reinstalaciones.
 
 ```yaml
+    - name: Comprobar si el destino de instalación existe
+      ansible.builtin.stat:
+        path: "{{ wf_install_dir }}"
+      register: wildfly_install_dest_stat
+
     - name: Eliminar directorio destino si ya existe y no es link (Limpieza)
       ansible.builtin.file:
         path: "{{ wf_install_dir }}"
         state: absent
-      when: not ansible_check_mode
+      when:
+        - not ansible_check_mode
+        - wildfly_install_dest_stat.stat.exists | default(false)
+        - not (wildfly_install_dest_stat.stat.islnk | default(false))
 ```
 
-**Resultado final del bloque (paso 7 — limpieza del destino):** si existía `/opt/wildfly` (enlace o directorio), ha sido eliminado; el directorio versionado `/opt/wildfly-{{ wf_version }}/` permanece. En modo `--check` la tarea no aplica el cambio (`when: not ansible_check_mode`).
+**Resultado final del bloque (paso 7 — limpieza del destino):** si `/opt/wildfly` existía como **directorio real** (no como enlace simbólico), ha sido eliminado; el directorio versionado `/opt/wildfly-{{ wf_version }}/` permanece. Si ya era un symlink, la tarea no lo borra (así las reejecuciones son idempotentes y no cortan el servicio). En modo `--check` tampoco aplica el cambio.
 
 ### Paso 8 — Enlace simbólico a la versión concreta
 
@@ -183,21 +192,20 @@ Crea el enlace desde el directorio versionado bajo `/opt` hacia la ruta estable 
         group: "{{ wf_group }}"
 ```
 
-**Resultado en el nodo:** directorio versionado `/opt/wildfly-39.0.1.Final/` con el árbol completo del servidor (por ejemplo `bin/standalone.sh`, `standalone/configuration/standalone.xml`, `docs/contrib/scripts/systemd/`, etc.), propietario `wildfly`. Enlace simbólico `/opt/wildfly` → `/opt/wildfly-39.0.1.Final`. Tras el paso 7, si existía un enlace o ruta previa en `/opt/wildfly`, se ha eliminado antes de recrear el enlace.
+**Resultado en el nodo:** directorio versionado `/opt/wildfly-39.0.1.Final/` con el árbol completo del servidor (por ejemplo `bin/standalone.sh`, `standalone/configuration/standalone.xml`, `docs/contrib/scripts/systemd/`, etc.), propietario `wildfly`. Enlace simbólico `/opt/wildfly` → `/opt/wildfly-39.0.1.Final`. Tras el paso 7, solo se elimina `/opt/wildfly` si era un directorio (no un symlink) antes de asegurar el enlace.
 
 **Resultado final del bloque (pasos 6–8 — instalación y ruta estable):** producto WildFly en `/opt/wildfly-<versión>/` y accesible también como `/opt/wildfly` (symlink); listo para configuración y servicio.
 
 ### Paso 9 — Escucha en todas las interfaces
 
-Modifica la línea correspondiente en `standalone.xml` del WildFly ya instalado (vía la ruta del enlace) para que la interfaz `public` use `0.0.0.0` por defecto en lugar de `127.0.0.1`. Asegúrate de que la expresión regular y la línea sustituta coinciden con el formato XML real del fichero.
+Modifica `standalone.xml` del WildFly ya instalado (vía la ruta del enlace) para que la interfaz `public` use `0.0.0.0` por defecto en lugar de `127.0.0.1`. El fragmento en WildFly 39 está **en varias líneas**; `lineinfile` sobre una sola línea no coincide. Usa `replace` con un patrón que cubra el bloque real:
 
 ```yaml
     - name: Configurar WildFly para que escuche en todas las IPs (0.0.0.0)
-      ansible.builtin.lineinfile:
+      ansible.builtin.replace:
         path: "{{ wf_install_dir }}/standalone/configuration/standalone.xml"
-        regexp: '<interface name="public">(\s*)<inet-address value="\$ \{jboss\.bind\.address:127\.0\.0\.1\}"/>'
-        line: '        <interface name="public"><inet-address value="${jboss.bind.address:0.0.0.0}"/></interface>'
-        backrefs: yes
+        regexp: '<interface name="public">\s*<inet-address value="\$\{jboss\.bind\.address:127\.0\.0\.1\}"/>\s*</interface>'
+        replace: '        <interface name="public"><inet-address value="${jboss.bind.address:0.0.0.0}"/></interface>'
 ```
 
 **Resultado en el nodo:** en `/opt/wildfly/standalone/configuration/standalone.xml` (vía el enlace), el fragmento de la interfaz `public` queda con `inet-address` por defecto `0.0.0.0` en lugar de `127.0.0.1`, de modo que el servidor pueda escuchar en todas las interfaces de red.
@@ -209,7 +217,7 @@ Modifica la línea correspondiente en `standalone.xml` del WildFly ya instalado 
 Copia desde la documentación incluida en la instalación el script `launch.sh` al árbol `bin` del WildFly, conservando permisos de ejecución.
 
 ```yaml
-    - name: Instalar el archivo de servicio Systemd (Siguiendo la guía de WF)
+    - name: Copiar script launch.sh para systemd
       ansible.builtin.copy:
         src: "{{ wf_install_dir }}/docs/contrib/scripts/systemd/launch.sh"
         dest: "{{ wf_install_dir }}/bin/launch.sh"
@@ -222,7 +230,7 @@ Copia desde la documentación incluida en la instalación el script `launch.sh` 
 Copia el fichero de unidad `wildfly.service` al directorio de unidades de systemd del sistema.
 
 ```yaml
-    - name: Instalar el archivo de servicio Systemd (Siguiendo la guía de WF)
+    - name: Instalar el archivo de servicio systemd
       ansible.builtin.copy:
         src: "{{ wf_install_dir }}/docs/contrib/scripts/systemd/wildfly.service"
         dest: "/etc/systemd/system/wildfly.service"
@@ -344,7 +352,7 @@ Ejemplo concreto (fragmento sobre tareas ya existentes):
     - name: Instalar dependencias (Java 17+ es requerido para WF 39)
       ansible.builtin.dnf:
         name:
-          - java-21-openjdk-devel
+          - "{{ wf_java_package }}"
           - tar
           - gzip
         state: present
@@ -527,7 +535,7 @@ Ejecución típica sobre el proyecto:
 yamllint .
 ```
 
-Opcional: añade un fichero `.yamllint` en la raíz para relajar o endurecer reglas según el estándar del curso.
+Opcional: añade un fichero `.yamllint` en la raíz para relajar o endurecer reglas según el estándar del curso. Los ejemplos de esta guía llevan gazapos de estilo (véase **Gazapos intencionados** más abajo).
 
 **Resultado final del bloque (5.1 — yamllint):** salida sin errores (código de salida `0`) o lista de ficheros/líneas a corregir según tu `.yamllint`; el YAML del proyecto cumple las reglas de estilo acordadas en el curso.
 
@@ -549,9 +557,23 @@ ansible-lint deploy-wildfly.yaml
 ansible-lint .
 ```
 
-Corrige los avisos que el formador marque como obligatorios para aprobar el ejercicio.
+Corrige los avisos que el formador marque como obligatorios para aprobar el ejercicio. En este curso hay **gazapos intencionados** (véase el recuadro siguiente): el playbook puede desplegar bien y aun así fallar el lint.
 
 **Resultado final del bloque (5.2 — ansible-lint):** ejecución con código de salida `0` (o solo avisos aceptados por el formador); playbooks y roles pasan las reglas de calidad configuradas (FQCN, nombres de tareas, idempotencia, etc.).
+
+### Gazapos intencionados (yamllint y ansible-lint)
+
+Los YAML de ejemplo de las secciones 2–4 incluyen **errores de estilo a propósito**. No rompen la ejecución en Dev Spaces; `yamllint` y `ansible-lint` sí deben marcarlos. Localízalos y corrígelos hasta código de salida `0`.
+
+| Gazapo | Dónde copiarlo / buscarlo | Herramienta y regla |
+| ------ | ------------------------- | ------------------- |
+| `remote_src: yes` (truthy `yes`/`no` en lugar de `true`/`false`) | `unarchive` y `copy` con `remote_src` | yamllint `truthy` / ansible-lint `yaml[truthy]` |
+| Nombres de handlers que no empiezan por mayúscula (`recargar systemd`, `reiniciar wildfly`) | `roles/wildfly_systemd/handlers/main.yml` | ansible-lint `name[casing]` |
+| Tareas `copy` / `file` sin `mode` | unidad `wildfly.service`, directorio `/etc/wildfly`, `wildfly.conf` | ansible-lint `risky-file-permissions` |
+| YAML de rol sin cabecera `---` | p. ej. `roles/wildfly_install/defaults/main.yml` | yamllint `document-start` |
+| Espacio en blanco al final de una línea | `group_vars/servers.yml` (línea de `wf_url`) | yamllint `trailing-spaces` |
+
+La parte de **Molecule (5.3)** no hay que tocarla para resolver estos avisos.
 
 ### 5.3 Molecule (prueba del playbook)
 

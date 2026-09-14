@@ -1,0 +1,10 @@
+---
+- name: Destroy (delegated — no se elimina la VM de laboratorio)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Conservar la VM Fedora del ejercicio
+      ansible.builtin.debug:
+        msg: >-
+          No se destruye {{ molecule_yml.platforms[0].name }}.
+          La instancia pertenece al laboratorio y se gestiona fuera de Molecule.

@@ -1,0 +1,27 @@
+---
+- name: Verify WildFly deployment
+  hosts: servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check if WildFly service is running
+      ansible.builtin.systemd:
+        name: wildfly
+        state: started
+      check_mode: true
+      register: service_status
+      failed_when: service_status.changed
+
+    - name: Wait for WildFly to listen on port 8080
+      ansible.builtin.wait_for:
+        port: 8080
+        timeout: 60
+
+    - name: Verify application sample.war is accessible
+      ansible.builtin.uri:
+        url: http://localhost:8080/sample/
+        status_code: 200
+      register: app_check
+      retries: 5
+      delay: 10
+      until: app_check.status == 200
