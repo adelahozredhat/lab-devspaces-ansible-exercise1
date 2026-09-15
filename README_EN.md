@@ -573,45 +573,397 @@ The example YAML in sections 2–4 includes **deliberate style errors**. They do
 | Role YAML without a `---` header | e.g. `roles/wildfly_install/defaults/main.yml` | yamllint `document-start` |
 | Trailing whitespace on a line | `group_vars/servers.yml` (`wf_url` line) | yamllint `trailing-spaces` |
 
-Do **not** change the **Molecule (5.3)** section to clear these warnings.
+Fix those warnings in playbooks, roles, and `group_vars` **before** running Molecule. The scenario runs `yamllint` and `ansible-lint` in the `prepare` step; if the nits remain, `molecule test` will fail there. You do not need to change the Molecule YAML files to clear them.
 
 ### 5.3 Molecule (playbook test)
 
-Molecule runs the playbook against an ephemeral environment (container, VM, or delegated to a provider) and a verification playbook.
+Molecule runs the playbook against a test environment and a verification playbook. In this exercise **you** create the `molecule/` tree (it is not shipped in the repository). There are two scenarios:
 
-This repository has a scenario under `molecule/default/` with **delegated** driver and `create`, `converge`, `verify`, and `destroy` steps. To align it with **this** WildFly exercise you must, at minimum:
+| Scenario | Use in the lab |
+| -------- | -------------- |
+| `default` | **delegated** driver: `create.yml` provisions a Fedora VM on OpenShift/KubeVirt, `converge` applies the playbook, and `destroy` removes the VM. |
+| `with_existin_machine` | Reuses the Fedora VM already assigned to you (the one in `inventory`). `create`/`destroy` do not create or delete the machine. This is the scenario you should run in class. |
 
-1. `**converge.yml`**: import or include your real playbook (for example `deploy-wildfly.yaml` or the role-based playbook), not a placeholder name.
-2. **Inventory / hosts**: the playbook group or host name must match what is defined in `molecule.yml` and in `host_vars` (for example if the play uses `hosts: servers`, the Molecule inventory must declare that group with the test platform hostname).
-3. `**verify.yml`**: check the `**wildfly**` service (not another unit name), wait for port **8080**, and validate the sample application URL (`**/sample/`** or the path that matches your WAR), with reasonable retries.
+The `molecule test` sequence is: `destroy` → `create` → **`prepare`** (`yamllint` and `ansible-lint`) → `converge` → `verify` → `destroy`.
 
-Typical installation:
+Installation (usually already in the Dev Spaces image; if not):
 
 ```bash
 pip install molecule molecule-plugins ansible
 ```
 
-Default scenario execution:
+Create the directories for both scenarios:
 
 ```bash
-cd /path/to/the/project
+mkdir -p molecule/default molecule/with_existin_machine
+```
+
+Keep three things aligned in every scenario: `converge.yml` must import `deploy-wildfly.yaml` (or the role-based playbook); the Molecule inventory must declare the `servers` group; `verify.yml` checks the `wildfly` service, port **8080**, and the `/sample/` URL.
+
+#### 5.3.1 Scenario `default` — test VM on OpenShift
+
+##### Step 1 — `molecule/default/molecule.yml`
+
+Define the delegated driver, platform, `servers` group inventory, and the test sequence including `prepare` (lint).
+
+```yaml
+---
+dependency:
+  name: galaxy
+driver:
+  name: delegated
+platforms:
+  - name: fedora-chocolate-smelt-74
+provisioner:
+  name: ansible
+  inventory:
+    hosts:
+      all:
+        children:
+          servers:
+            hosts:
+              fedora-chocolate-smelt-74: {}
+    host_vars:
+      fedora-chocolate-smelt-74:
+        ansible_user: fedora
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - destroy
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy
+```
+
+**Result in the project:** Molecule recognizes the `default` scenario; the play `hosts: servers` resolves to the test host.
+
+##### Step 2 — `molecule/default/molecule_vars.yml`
+
+OpenShift credentials for `create.yml` / `destroy.yml`. Replace URL, user, and password with those from your assignment (lab Excel). **Do not** push real secrets to a public remote.
+
+```yaml
+---
+ocp_url: "https://api.tu-cluster.com:6443"
+ocp_user: "admin"
+ocp_pass: "mi_password_secreto"
+```
+
+**Result in the project:** `ocp_*` variables available for the creation playbook.
+
+##### Step 3 — `molecule/default/create.yml`
+
+Creates the Fedora VM with KubeVirt and waits for SSH. Requires authenticated `oc` and the `kubevirt.core` / `kubernetes.core` collections.
+
+```yaml
+---
+- name: Create VM in OpenShift
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - molecule_vars.yml
+  vars:
+    password: "{{ ocp_pass | default(omit) }}"
+  tasks:
+    - name: Log in to OpenShift
+      ansible.builtin.command:
+        cmd: oc login --insecure-skip-tls-verify -u {{ ocp_user }} -p {{ password }} {{ ocp_url }}
+      changed_when: false
+
+    - name: Get OpenShift API token
+      ansible.builtin.command:
+        cmd: oc whoami --show-token
+      register: token
+      changed_when: false
+
+    - name: Create Fedora VM using KubeVirt
+      kubevirt.core.kubevirt_vm:
+        host: "{{ ocp_url }}"
+        api_key: "{{ token.stdout }}"
+        state: present
+        namespace: my-namespace
+        name: "{{ item.name }}"
+        spec:
+          running: true
+          template:
+            spec:
+              domain:
+                devices:
+                  interfaces:
+                    - name: default
+                      masquerade: {}
+                  disks:
+                    - name: containerdisk
+                      disk: {bus: virtio}
+                resources:
+                  requests:
+                    memory: 2Gi
+              volumes:
+                - name: containerdisk
+                  containerDisk:
+                    image: quay.io/containerdisks/fedora:latest
+      loop: "{{ molecule_yml.platforms }}"
+
+    - name: Wait for SSH to be ready
+      ansible.builtin.wait_for:
+        host: "{{ item.address | default('localhost') }}"
+        port: 22
+        timeout: 300
+      loop: "{{ molecule_yml.platforms }}"
+```
+
+Adjust `namespace`, `ansible_user`, and the real VM IP/DNS when the lab provides them. Without a node reachable over SSH, `converge` cannot apply the playbook.
+
+**Result on OpenShift:** VM `fedora-chocolate-smelt-74` present in the namespace; SSH on port 22.
+
+##### Step 4 — `molecule/default/destroy.yml`
+
+Removes the VM and, optionally, an associated Service.
+
+```yaml
+---
+- name: Destroy VM in OpenShift
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - molecule_vars.yml
+  tasks:
+    - name: Remove Fedora VM from OpenShift
+      kubevirt.core.kubevirt_vm:
+        host: "{{ ocp_url }}"
+        state: absent
+        namespace: my-namespace
+        name: "{{ item.name }}"
+        wait: true
+        wait_timeout: 300
+      loop: "{{ molecule_yml.platforms }}"
+      ignore_errors: true
+
+    - name: Clean up associated resources
+      kubernetes.core.k8s:
+        host: "{{ ocp_url }}"
+        state: absent
+        namespace: my-namespace
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+      loop:
+        - {kind: Service, name: "svc-{{ molecule_yml.platforms[0].name }}"}
+      ignore_errors: true
+```
+
+**Result on OpenShift:** the test VM (and the Service if it existed) are gone; `ignore_errors` keeps the scenario from failing if the VM was never created.
+
+##### Step 5 — `molecule/default/prepare.yml` (yamllint and ansible-lint)
+
+This playbook is Molecule’s hook **after `create` and before `converge`**. It runs the same checks as sections 5.1 and 5.2, so `molecule test` does not continue if YAML or Ansible practices fail.
+
+```yaml
+---
+- name: Lint YAML and Ansible before converge
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+  tasks:
+    - name: Run yamllint on the project
+      ansible.builtin.command:
+        cmd: yamllint .
+        chdir: "{{ project_dir }}"
+      changed_when: false
+
+    - name: Run ansible-lint on the project
+      ansible.builtin.command:
+        cmd: ansible-lint .
+        chdir: "{{ project_dir }}"
+      changed_when: false
+```
+
+If `yamllint .` complains about Molecule’s cache (`.cache/`), add a `.yamllint` at the project root that `ignore`s `.cache/` and `.ansible-sign/` (see 5.1).
+
+**Result in the project:** `molecule prepare` (and the `prepare` step of `molecule test`) exits `0` only if yamllint and ansible-lint pass.
+
+##### Step 6 — `molecule/default/converge.yml`
+
+Apply the real exercise playbook, not a placeholder.
+
+```yaml
+---
+- name: Converge
+  ansible.builtin.import_playbook: ../../deploy-wildfly.yaml
+```
+
+**Result on the test node:** the same state as running `ansible-playbook -i inventory deploy-wildfly.yaml` (WildFly, service, and sample WAR).
+
+##### Step 7 — `molecule/default/verify.yml`
+
+Check service, port, and sample application.
+
+```yaml
+---
+- name: Verify WildFly deployment
+  hosts: servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check if WildFly service is running
+      ansible.builtin.systemd:
+        name: wildfly
+        state: started
+      check_mode: true
+      register: service_status
+      failed_when: service_status.changed
+
+    - name: Wait for WildFly to listen on port 8080
+      ansible.builtin.wait_for:
+        port: 8080
+        timeout: 60
+
+    - name: Verify application sample.war is accessible
+      ansible.builtin.uri:
+        url: http://localhost:8080/sample/
+        status_code: 200
+      register: app_check
+      retries: 5
+      delay: 10
+      until: app_check.status == 200
+```
+
+**Result on the node:** `wildfly` active, port 8080 listening, and HTTP 200 on `/sample/`.
+
+**Final result of this block (5.3.1 — `default` scenario):** `molecule/default/` tree with `molecule.yml`, `molecule_vars.yml`, `create.yml`, `destroy.yml`, `prepare.yml`, `converge.yml`, and `verify.yml`.
+
+#### 5.3.2 Scenario `with_existin_machine` — lab VM
+
+Uses the Fedora VM you already configured under **Inventory**. Copy `prepare.yml` and `verify.yml` from the `default` scenario (same lint and same assertions). `converge.yml` is identical (imports `deploy-wildfly.yaml`).
+
+##### Step 8 — `molecule/with_existin_machine/molecule.yml`
+
+Driver `default` with `managed: false`: Molecule does not provision an instance. `ansible_host` must match the `inventory` file (lab Excel). If you use a local SSH tunnel in Dev Spaces, keep `127.0.0.1` and the forwarded port.
+
+```yaml
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+  options:
+    managed: false
+platforms:
+  - name: fedora-user1
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      roles_path: ${MOLECULE_PROJECT_DIRECTORY}/roles
+      host_key_checking: false
+      interpreter_python: auto_silent
+  inventory:
+    hosts:
+      all:
+        children:
+          servers:
+            hosts:
+              fedora-user1: {}
+    host_vars:
+      fedora-user1:
+        ansible_user: user1
+        ansible_host: 127.0.0.1
+        ansible_port: 2222
+        ansible_ssh_private_key_file: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/ssh_tests_connections/id_fedora_new"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - destroy
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy
+```
+
+**Result in the project:** the `servers` group points to `fedora-user1` with the same SSH identity as the course inventory.
+
+##### Step 9 — `molecule/with_existin_machine/create.yml`
+
+```yaml
+---
+- name: Create (delegated — the lab VM already exists)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Confirm that a new VM is not created
+      ansible.builtin.debug:
+        msg: >-
+          Default (delegated) driver with managed=false.
+          Reusing lab instance {{ molecule_yml.platforms[0].name }}.
+```
+
+**Result on the node:** none; only a message. The lab VM is unchanged.
+
+##### Step 10 — `molecule/with_existin_machine/destroy.yml`
+
+```yaml
+---
+- name: Destroy (delegated — the lab VM is not deleted)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Keep the exercise Fedora VM
+      ansible.builtin.debug:
+        msg: >-
+          Not destroying {{ molecule_yml.platforms[0].name }}.
+          The instance belongs to the lab and is managed outside Molecule.
+```
+
+**Result on the node:** none; the student’s Fedora VM is **not** powered off or deleted.
+
+##### Step 11 — Remaining scenario files
+
+Create:
+
+- `molecule/with_existin_machine/prepare.yml` — same content as **step 5**.
+- `molecule/with_existin_machine/converge.yml` — same content as **step 6**.
+- `molecule/with_existin_machine/verify.yml` — same content as **step 7**.
+
+**Final result of this block (5.3.2 — `with_existin_machine` scenario):** `molecule/with_existin_machine/` tree with `molecule.yml`, `create.yml`, `destroy.yml`, `prepare.yml`, `converge.yml`, and `verify.yml`; lint and functional checks identical to `default`, without creating or destroying the classroom VM.
+
+#### 5.3.3 Run the Molecule tests
+
+From the **project root** (next to `deploy-wildfly.yaml`).
+
+Default scenario (`default`, creates/destroys an OpenShift VM; only if the instructor asks and you have credentials):
+
+```bash
 molecule test
 ```
 
-Manual sequence (debugging):
+Classroom scenario (existing VM; the one you should use in the lab):
 
 ```bash
-molecule create
-molecule converge
-molecule verify
-molecule destroy
+molecule test -s with_existin_machine
 ```
 
-Adjust `create.yml` and credentials in group variables if your lab environment uses OpenShift/KubeVirt or another backend; without a node reachable over SSH, `converge` cannot apply the playbook.
+Manual sequence (debugging), same `-s` if it is not `default`:
 
-**Final result of this block (5.3 — Molecule):** `molecule test` completes the sequence `destroy` → `create` → `converge` → `verify` → `destroy` with exit code `0`; the playbook is applied in the test environment and `verify.yml` confirms service, port, and application URL. If a step fails, the output indicates which scenario (`converge` / `verify`) to fix.
+```bash
+molecule create -s with_existin_machine
+molecule prepare -s with_existin_machine
+molecule converge -s with_existin_machine
+molecule verify -s with_existin_machine
+molecule destroy -s with_existin_machine
+```
 
-**Final result of this block (§5 — quality):** repeatable local pipeline: valid and consistent YAML (yamllint), Ansible best practices (ansible-lint), and end-to-end test (Molecule) aligned with WildFly and `/sample/`.
+`molecule prepare` is the step that runs **yamllint** and **ansible-lint**. If it fails, fix the nits from 5.1/5.2 (or `.yamllint`) before `converge`.
+
+**Final result of this block (5.3 — Molecule):** both scenarios created on disk; `molecule test -s with_existin_machine` completes `destroy` → `create` → `prepare` (lint) → `converge` → `verify` → `destroy` with exit code `0`; the playbook is applied on the lab VM and `verify.yml` confirms service, port, and URL. If you use `default`, the OpenShift VM is also created and then removed.
+
+**Final result of this block (§5 — quality):** repeatable local pipeline: valid YAML (yamllint), Ansible best practices (ansible-lint) — first by hand (5.1–5.2) and again **inside** Molecule (`prepare`) — and an end-to-end test aligned with WildFly and `/sample/`.
 
 ---
 
