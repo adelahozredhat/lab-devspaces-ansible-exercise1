@@ -1,6 +1,8 @@
 # lab-devspaces-ansible-exercise1
 
-Hands-on course on Ansible playbook development. The reference file `deploy-wildfly.yaml` shows the target result; this document is a guide to build it, refactor it, and validate it with quality tools.
+Hands-on course on Ansible playbook development. **This exercise is designed to be completed inside OpenShift Dev Spaces** (the lab workspace already includes Ansible, Molecule 25.5.x, ansible-lint, yamllint, `oc`, and ansible-sign). The classroom Fedora VM is reachable over SSH from that workspace.
+
+**The repository does not include `deploy-wildfly.yaml`.** You must **create it yourself** at the project root (same level as this README) by copying and assembling the YAML snippets from the sections below. This document is the guide to build it, refactor it, and validate it with quality tools.
 
 ---
 
@@ -28,9 +30,9 @@ The playbook automates a **WildFly 39** installation aligned with the official p
 7. **Integrates systemd**: copies `launch.sh`, the `wildfly.service` unit, and `wildfly.conf` from the examples included in the distribution, creates `/etc/wildfly`, and starts and enables the service with a systemd daemon reload.
 8. **Deploys a sample application** by packaging a local `index.html` as a WAR on the controller and copying it to WildFly’s `standalone/deployments` directory to verify the deployment pipeline.
 
-In the reference file there are commented **firewalld** tasks; you can enable them in your version if the environment requires it.
+In the examples in this guide there are commented **firewalld** tasks; you can enable them in your version if the environment requires it.
 
-**Final result of this block (§1 — overview):** after running the reference playbook against `servers`, the node has WildFly installed under `/opt`, a `wildfly` service managed by systemd, network listen (public interface `0.0.0.0`), and a sample application reachable over HTTP at the `/sample/` context (default port 8080), unless the firewall blocks external access.
+**Final result of this block (§1 — overview):** after running the playbook you have been building against `servers`, the node has WildFly installed under `/opt`, a `wildfly` service managed by systemd, network listen (public interface `0.0.0.0`), and a sample application reachable over HTTP at the `/sample/` context (default port 8080), unless the firewall blocks external access.
 
 ---
 
@@ -38,26 +40,26 @@ In the reference file there are commented **firewalld** tasks; you can enable th
 
 Before **section 2 (step-by-step guide for the monolithic playbook)**, you must adapt the `inventory` file in **the same folder as this README**. The play targets the `[servers]` group; that is where you define which machine Ansible will run against and which SSH user and key it will use.
 
-The host details for your **Fedora virtual machine** deployed in the lab environment (name or address reachable from OpenShift Dev Spaces, SSH user if it differs from the template, and so on) are in the **lab access data and general information Excel** you were given. Replace the `ansible_host` value (and, if the document or instructor says so, `ansible_user` or the host alias in the first column) with those assigned to you. Keep the `ansible_ssh_private_key_file` path aligned with the key you prepared in “Environment setup” (for example `ssh_tests_connections/id_fedora_new`).
+The host details for your **Fedora virtual machine** (name, IP or address reachable from OpenShift Dev Spaces, SSH user if it differs from the template, and so on) are in **your lab user access data** (Excel or handout you were given). Host and IP values in this guide are **examples only**: do not copy them as-is. Replace `ansible_host` (and, if the document or instructor says so, `ansible_user` or the host alias in the first column) with **your** assignment. Keep the `ansible_ssh_private_key_file` path aligned with the key you prepared in “Environment setup” (for example `ssh_tests_connections/id_fedora_new`).
 
-Reference file template:
+Reference file template (`fedora-user1` and the IP placeholder are examples):
 
 ```ini
 [servers]
-fedora-user1 ansible_host=<host_or_IP_from_Excel> ansible_user=user1 ansible_ssh_private_key_file=ssh_tests_connections/id_fedora_new
+fedora-user1 ansible_host=<IP_from_your_lab_access_data> ansible_user=user1 ansible_ssh_private_key_file=ssh_tests_connections/id_fedora_new
 ```
 
 Without a correct inventory, `ansible-playbook -i inventory …` will not be able to reach your VM. Check SSH connectivity from the workspace before continuing with the guide.
 
-**Final result of this block (inventory):** `inventory` file with `ansible_host` (and other fields if applicable) consistent with the lab Excel; the `servers` group resolves to your Fedora VM for later playbook runs.
+**Final result of this block (inventory):** `inventory` file with `ansible_host` (and other fields if applicable) consistent with **your lab user access data**; the `servers` group resolves to your Fedora VM for later playbook runs.
 
 ---
 
 ## 2. Step-by-step guide (first monolithic playbook)
 
-Goal: obtain a playbook equivalent to the reference one, understanding the **logical order** and **purpose** of each block. This guide does not repeat the documentation of every Ansible module; consult the official module documentation the first time you use it.
+Goal: build `deploy-wildfly.yaml` at the project root (the file **is not** in the repository), understanding the **logical order** and **purpose** of each block. This guide does not repeat the documentation of every Ansible module; consult the official module documentation the first time you use it.
 
-After each step, the **concrete YAML** taken from `deploy-wildfly.yaml` is shown. At the end of each **logical block**, the **resulting state** on the node is summarized (files, services, or no on-disk changes).
+After each step, the **concrete YAML** you must copy and accumulate into `deploy-wildfly.yaml` is shown. At the end of each **logical block**, the **resulting state** on the node is summarized (files, services, or no on-disk changes).
 
 ### Step 1 — Play header
 
@@ -377,7 +379,7 @@ Group related tasks in `block` for:
 
 You do not have to add `rescue`/`always` if you only want visual grouping; `block` plus comments in the playbook is enough.
 
-Concrete example (same block as step 15, already present in the reference playbook):
+Concrete example (same block as step 15, already present in the playbook you are building):
 
 ```yaml
     - name: Crear y desplegar la aplicación de ejemplo
@@ -535,7 +537,7 @@ Typical run over the project:
 yamllint .
 ```
 
-Optional: add a `.yamllint` file at the root to relax or tighten rules according to the course standard. The examples in this guide include style nits (see **Intentional nits** below).
+Optional: add a `.yamllint` file at the root to relax or tighten rules according to the course standard, and to **ignore** files you did not author (for example the repository `devfile.yaml`, Molecule `.cache/`, and `.ansible-sign/`). The examples in this guide include style nits (see **Intentional nits** below).
 
 **Final result of this block (5.1 — yamllint):** output with no errors (exit code `0`) or a list of files/lines to fix according to your `.yamllint`; the project YAML meets the style rules agreed in the course.
 
@@ -549,12 +551,14 @@ Installation:
 pip install ansible-lint
 ```
 
-Execution:
+Execution (covers the **whole project**: playbook, roles, and `group_vars`; `ansible-lint .` may skip roles and variables and report a false 0):
 
 ```bash
+# After the monolithic playbook (no roles yet):
 ansible-lint deploy-wildfly.yaml
-# or, if you already have roles:
-ansible-lint .
+
+# With roles and group_vars (full exercise validation):
+ansible-lint deploy-wildfly.yaml roles group_vars
 ```
 
 Fix the warnings the instructor marks as mandatory to pass the exercise. This course includes **intentional nits** (see the box below): the playbook can deploy successfully and still fail lint.
@@ -563,26 +567,32 @@ Fix the warnings the instructor marks as mandatory to pass the exercise. This co
 
 ### Intentional nits (yamllint and ansible-lint)
 
-The example YAML in sections 2–4 includes **deliberate style errors**. They do not break execution in Dev Spaces; `yamllint` and `ansible-lint` must flag them. Find and fix them until you get exit code `0`.
+The example YAML in sections 2–4 includes **deliberate style errors**. They do not break execution in Dev Spaces; `yamllint` and `ansible-lint` must flag them.
 
-| Nit | Where to copy / look | Tool and rule |
-| --- | -------------------- | ------------- |
+The table below is **only an example** of common warnings. **It is not a closed list**: the tools may report more rules (`var-naming`, `line-length`, `key-order`, permissions on other `copy`/`file` tasks, the repo `devfile.yaml`, and so on). Review **the full output**, find each failure in your tree, and fix it until you get exit code `0`.
+
+| Nit (example) | Where to copy / look | Tool and rule |
+| ------------- | -------------------- | ------------- |
 | `remote_src: yes` (truthy `yes`/`no` instead of `true`/`false`) | `unarchive` and `copy` with `remote_src` | yamllint `truthy` / ansible-lint `yaml[truthy]` |
 | Handler names that do not start with an uppercase letter (`recargar systemd`, `reiniciar wildfly`) | `roles/wildfly_systemd/handlers/main.yml` | ansible-lint `name[casing]` |
 | `copy` / `file` tasks without `mode` | `wildfly.service` unit, `/etc/wildfly` directory, `wildfly.conf` | ansible-lint `risky-file-permissions` |
 | Role YAML without a `---` header | e.g. `roles/wildfly_install/defaults/main.yml` | yamllint `document-start` |
 | Trailing whitespace on a line | `group_vars/servers.yml` (`wf_url` line) | yamllint `trailing-spaces` |
 
-Fix those warnings in playbooks, roles, and `group_vars` **before** running Molecule. The scenario runs `yamllint` and `ansible-lint` in the `prepare` step; if the nits remain, `molecule test` will fail there. You do not need to change the Molecule YAML files to clear them.
+Fix **all** warnings (those in the table and any others that appear) in playbooks, roles, and `group_vars` **before** running Molecule. The scenario runs `yamllint` and `ansible-lint` in the `prepare` step; if failures remain, `molecule test` will fail there. You do not need to change the Molecule YAML files to clear them.
 
 ### 5.3 Molecule (playbook test)
 
-Molecule runs the playbook against a test environment and a verification playbook. In this exercise **you** create the `molecule/` tree (it is not shipped in the repository). There are two scenarios:
+Molecule runs the playbook against a test environment and a verification playbook. In this exercise **you** create the `molecule/` tree (it is not shipped in the repository).
 
-| Scenario | Use in the lab |
-| -------- | -------------- |
-| `default` | **delegated** driver: `create.yml` provisions a Fedora VM on OpenShift/KubeVirt, `converge` applies the playbook, and `destroy` removes the VM. |
-| `with_existin_machine` | Reuses the Fedora VM already assigned to you (the one in `inventory`). `create`/`destroy` do not create or delete the machine. This is the scenario you should run in class. |
+The Dev Spaces image includes **Molecule 25.5.0**. In that version the driver is named `default` (the old name `delegated` **no longer exists**; if you use it, `molecule` fails when loading scenarios).
+
+You can **define both scenarios** in the project. They differ in where the machine comes from:
+
+| Scenario | Test machine | What `create` / `destroy` do | Where to run it |
+| -------- | ------------ | ---------------------------- | --------------- |
+| `default` | Fedora VM **created inside OpenShift** (KubeVirt) | `create.yml` provisions the VM; `destroy.yml` removes it at the end. | **Only from Dev Spaces** (this course does not run it outside that workspace). |
+| `with_existin_machine` | **Pre-started** lab Fedora VM (the one in `inventory`) | Does not create or delete the machine; reuses the instance already running. | From Dev Spaces, against the inventory Fedora. |
 
 The `molecule test` sequence is: `destroy` → `create` → **`prepare`** (`yamllint` and `ansible-lint`) → `converge` → `verify` → `destroy`.
 
@@ -602,16 +612,18 @@ Keep three things aligned in every scenario: `converge.yml` must import `deploy-
 
 #### 5.3.1 Scenario `default` — test VM on OpenShift
 
+This scenario is run **only from Dev Spaces**.
+
 ##### Step 1 — `molecule/default/molecule.yml`
 
-Define the delegated driver, platform, `servers` group inventory, and the test sequence including `prepare` (lint).
+Define the `default` driver (Molecule 25.5.0 in the lab image), platform, `servers` group inventory, and the test sequence including `prepare` (lint).
 
 ```yaml
 ---
 dependency:
   name: galaxy
 driver:
-  name: delegated
+  name: default
 platforms:
   - name: fedora-chocolate-smelt-74
 provisioner:
@@ -777,12 +789,12 @@ This playbook is Molecule’s hook **after `create` and before `converge`**. It 
 
     - name: Run ansible-lint on the project
       ansible.builtin.command:
-        cmd: ansible-lint .
+        cmd: ansible-lint deploy-wildfly.yaml roles group_vars
         chdir: "{{ project_dir }}"
       changed_when: false
 ```
 
-If `yamllint .` complains about Molecule’s cache (`.cache/`), add a `.yamllint` at the project root that `ignore`s `.cache/` and `.ansible-sign/` (see 5.1).
+If `yamllint .` complains about Molecule’s cache (`.cache/`) or the repository `devfile.yaml`, add a `.yamllint` at the project root that `ignore`s `.cache/`, `.ansible-sign/`, and `devfile.yaml` (see 5.1).
 
 **Result in the project:** `molecule prepare` (and the `prepare` step of `molecule test`) exits `0` only if yamllint and ansible-lint pass.
 
@@ -842,7 +854,7 @@ Uses the Fedora VM you already configured under **Inventory**. Copy `prepare.yml
 
 ##### Step 8 — `molecule/with_existin_machine/molecule.yml`
 
-Driver `default` with `managed: false`: Molecule does not provision an instance. `ansible_host` must match the `inventory` file (lab Excel). If you use a local SSH tunnel in Dev Spaces, keep `127.0.0.1` and the forwarded port.
+Driver `default` with `managed: false`: Molecule does not provision an instance. `ansible_host` must be the IP from **your lab access data** (the same one as in `inventory`). The `fedora-user1`, `127.0.0.1`, and port `2222` values in the YAML below are **examples only** (SSH tunnel in Dev Spaces). If the workspace can reach the VM directly, use that IP and port 22.
 
 ```yaml
 ---
@@ -935,9 +947,12 @@ Create:
 
 #### 5.3.3 Run the Molecule tests
 
-From the **project root** (next to `deploy-wildfly.yaml`).
+From the **project root** (next to `deploy-wildfly.yaml`), in **Dev Spaces**.
 
-Default scenario (`default`, creates/destroys an OpenShift VM; only if the instructor asks and you have credentials):
+- `with_existin_machine` is the scenario you run against the lab Fedora.
+- `default` is run **only from Dev Spaces** (`molecule test` without `-s` uses `default`).
+
+Default scenario (`default`, creates/destroys an OpenShift VM; **Dev Spaces only**):
 
 ```bash
 molecule test
@@ -959,7 +974,7 @@ molecule verify -s with_existin_machine
 molecule destroy -s with_existin_machine
 ```
 
-`molecule prepare` is the step that runs **yamllint** and **ansible-lint**. If it fails, fix the nits from 5.1/5.2 (or `.yamllint`) before `converge`.
+`molecule prepare` is the step that runs **yamllint** and **ansible-lint** on the project (playbook, roles, and `group_vars`). If it fails, fix all warnings from 5.1/5.2 (not only those in the example table) before `converge`.
 
 **Final result of this block (5.3 — Molecule):** both scenarios created on disk; `molecule test -s with_existin_machine` completes `destroy` → `create` → `prepare` (lint) → `converge` → `verify` → `destroy` with exit code `0`; the playbook is applied on the lab VM and `verify.yml` confirms service, port, and URL. If you use `default`, the OpenShift VM is also created and then removed.
 
@@ -1022,18 +1037,38 @@ If you sign and verify the same project yourself on the same machine, your publi
 
 ### 6.3 `MANIFEST.in`: which files go into the signature
 
-At the **project root** (same level as `deploy-wildfly.yaml`), create a `MANIFEST.in` file following the [manifest syntax](https://setuptools.pypa.io/en/latest/userguide/miscellaneous.html) that ansible-sign uses. Include the playbook and the rest of the automation artifacts you want to protect; **exclude** `inventory` if it contains data specific to your VM (it changes between students and would break collective verification unless everyone shares the same content).
+**Before signing**, create a `MANIFEST.in` file at the **project root** (same level as `deploy-wildfly.yaml`). ansible-sign uses the [manifest syntax](https://setuptools.pypa.io/en/latest/userguide/miscellaneous.html).
 
-Indicative example for this repository:
+Important behaviour: on **verify** (`gpg-verify`), ansible-sign prepends `global-include *` to the manifest. That means **any project file that is not excluded** is compared with the checksum. If you only `include` the playbook and leave out `.git`, `inventory`, or SSH keys, the GPG signature can be valid and checksum validation can **still fail**.
+
+The manifest must therefore:
+
+1. **Include** the playbook and the other automation artifacts you want to protect (`deploy-wildfly.yaml`, `index.html`, roles, Molecule YAML, `group_vars`, and so on).
+2. **Exclude** data specific to your VM and secrets: `inventory`, the SSH private key, `molecule/default/molecule_vars.yml` (OpenShift credentials).
+3. **`prune`** directories that must not be signed: `.git`, `.cache` (Molecule). ansible-sign already ignores `.ansible-sign`.
+
+Indicative example for this exercise (adjust it to your tree; if you do not have `roles/` or `group_vars/` yet, omit those lines or create them before signing):
 
 ```text
 include deploy-wildfly.yaml
 include index.html
+include README.md
+include .yamllint
+include .ansible-lint
+recursive-include roles *.yml
 recursive-include molecule *.yml
+recursive-include group_vars *.yml
+prune .git
+prune .cache
 exclude inventory
+exclude molecule/default/molecule_vars.yml
+exclude ssh_tests_connections/id_fedora_new
+exclude ssh_tests_connections/id_fedora_new.pub
+global-exclude *.pyc
+global-exclude *.retry
 ```
 
-If you add roles or other playbooks, extend the manifest with `recursive-include roles *.yml` or other `include` directives consistent with your tree.
+Create the file, check that the paths exist, and **then** run `gpg-sign`. If `gpg-verify` lists files under `added`, add them with `include`/`recursive-include` or exclude them with `exclude`/`prune` and sign again.
 
 ### 6.4 Sign the project
 
@@ -1067,29 +1102,29 @@ More detail on errors: `ansible-sign --debug project gpg-verify .`
 
 ## Summary
 
-1. Configure the `inventory` file in this folder with the host of your Fedora VM on OpenShift according to the lab access data and general information Excel (see the **Inventory** section before section 2).
-2. Build the monolithic playbook following the steps in section 2.
+1. This lab is done **in OpenShift Dev Spaces**. Configure the `inventory` file in this folder with the host of your Fedora VM using **your lab access data** (IP values in this guide are examples only; see the **Inventory** section before section 2).
+2. **Create** `deploy-wildfly.yaml` by copying the snippets from section 2 (the file is not in the repository).
 3. Refactor with `tags` and `block` (section 3).
 4. Extract to roles, centralize variables, and add handlers (section 4).
-5. Validate with yamllint, ansible-lint, and Molecule (section 5).
-6. Sign the project with `ansible-sign` and check the signature with `ansible-sign project gpg-verify` (section 6), using the shared lab passphrase.
+5. Validate with yamllint, ansible-lint (playbook + roles + `group_vars`), and Molecule (section 5). The `default` scenario only from Dev Spaces.
+6. Create `MANIFEST.in` (section 6.3), sign the project with `ansible-sign`, and check the signature with `ansible-sign project gpg-verify` (section 6), using the shared lab passphrase.
 
-The `deploy-wildfly.yaml` file in the repository is the result reference; the practice is to reproduce it, improve it structurally, and demonstrate quality with the tools above.
+The practice is to build the playbook, improve it structurally, and demonstrate quality with the tools above.
 
 ---
 
 ## Auxiliary commands
 
-The inventory must already be configured as in the section **Inventory: Fedora VM host on OpenShift** (host and SSH identity matching the lab Excel).
+The inventory must already be configured as in the section **Inventory: Fedora VM host on OpenShift**. Use the IP from **your lab access data**; the address in the `ssh` command below is **an example only**.
 
 ```bash
 ansible-playbook -i inventory deploy-wildfly.yaml
 ```
 
-Manual checks after deployment (example):
+Manual checks after deployment:
 
 ```bash
-ssh user1@10.234.2.26 -i ssh_tests_connections/id_fedora_new
+ssh user1@<IP_from_your_lab_access_data> -i ssh_tests_connections/id_fedora_new
 curl localhost:8080/sample/
 ```
 
