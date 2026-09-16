@@ -432,8 +432,8 @@ Extrae los bloques anteriores a **roles** dentro del mismo proyecto de playbook 
 | `wildfly_account`    | Grupo y usuario de sistema.                                               |
 | `wildfly_install`    | Descarga, extracción, limpieza condicional del destino, enlace simbólico. |
 | `wildfly_bind`       | Ajuste de `standalone.xml` para `0.0.0.0`.                                |
-| `wildfly_systemd`    | `launch.sh`, `wildfly.service`, `/etc/wildfly`, arranque y habilitación.  |
-| `wildfly_sample_app` | Bloque de empaquetado local y copia del WAR.                              |
+| `wildfly_systemd`    | `launch.sh`, `wildfly.service`, plantilla `wildfly.conf.j2`, arranque.    |
+| `wildfly_sample_app` | `files/index.html`, empaquetado local del WAR y copia al despliegue.      |
 
 
 Puedes fusionar roles si prefieres menos granularidad; lo importante es que cada rol tenga una responsabilidad clara.
@@ -447,7 +447,9 @@ roles/
   wildfly_install/tasks/main.yml
   wildfly_bind/tasks/main.yml
   wildfly_systemd/tasks/main.yml
+  wildfly_systemd/templates/wildfly.conf.j2
   wildfly_sample_app/tasks/main.yml
+  wildfly_sample_app/files/index.html
 deploy-wildfly.yaml   # o site.yml que importa roles
 ```
 
@@ -469,10 +471,10 @@ wf_url: "https://github.com/wildfly/wildfly/releases/download/{{ wf_version }}/w
 
 ### 4.3 Handlers
 
-Sustituye o complementa tareas que hoy mezclan “cambiar fichero” y “reiniciar servicio” con el patrón `**notify`**:
+Sustituye o complementa tareas que hoy mezclan “cambiar fichero” y “reiniciar servicio” con el patrón `notify`:
 
-- Handler `**recargar systemd**`: ejecuta recarga del demonio cuando cambian unidades bajo `/etc/systemd/system`.
-- Handler `**reiniciar wildfly**`: reinicia el servicio cuando cambian `wildfly.conf`, `launch.sh` o ficheros bajo `standalone/configuration` que requieran reinicio.
+- Handler `recargar systemd`: ejecuta recarga del demonio cuando cambian unidades bajo `/etc/systemd/system`.
+- Handler `reiniciar wildfly`: reinicia el servicio cuando cambian `wildfly.conf`, `launch.sh` o ficheros bajo `standalone/configuration` que requieran reinicio.
 
 En las tareas `copy` o `template` que modifiquen esos ficheros, añade `notify` con el nombre del handler. Mantén coherencia: si una tarea ya fuerza `daemon_reload` y `state: started`, al introducir handlers revisa que no dupliques reinicios innecesarios en la primera ejecución.
 
@@ -528,7 +530,98 @@ Las etiquetas puedes definirlas a nivel de rol en el playbook o dentro de cada r
 
 **Resultado en el nodo:** equivalente a ejecutar el playbook monolítico completo; la diferencia está en el **layout del repositorio** (roles reutilizables) y en la posibilidad de sobrescribir variables por entorno sin editar las tareas.
 
-**Resultado final del bloque (§4 — roles):** en disco del objetivo, el mismo resultado que **Resultado final del bloque (§2)** si los roles replican las mismas tareas y variables. En el **proyecto**: directorio `roles/` con `tasks/main.yml`, `defaults/main.yml` y, si aplica, `handlers/main.yml`; playbook corto que solo ordena roles y opcionalmente `group_vars` / `vars`.
+### 4.5 Ficheros estáticos (`files/`) y plantillas Jinja2 (`templates/`)
+
+Cuando el playbook ya está partido en roles, deja de tratar `index.html` y `wildfly.conf` como rutas sueltas en la raíz del proyecto. Ansible busca ficheros estáticos en `files/` del rol y plantillas Jinja2 en `templates/`. El módulo `copy` con un `src` sin directorio resuelve el fichero dentro de `files/`; `template` hace lo mismo con `templates/` y además interpola variables.
+
+#### Paso 1 — `index.html` en `files/` del rol `wildfly_sample_app`
+
+Mueve el `index.html` de la raíz del proyecto a `roles/wildfly_sample_app/files/index.html` (mismo contenido HTML del paso 15). En el bloque de la aplicación de ejemplo, copia primero ese fichero al controlador (`delegate_to: localhost`, `become: false`) y después empaquétalo como WAR, igual que en el monolito.
+
+```yaml
+    - name: Crear y desplegar la aplicación de ejemplo
+      tags: [app]
+      block:
+        - name: Copiar index.html desde files/ del rol
+          ansible.builtin.copy:
+            src: index.html
+            dest: /tmp/index.html
+            mode: "0644"
+          delegate_to: localhost
+          become: false
+
+        - name: Empaquetar WAR localmente
+          community.general.archive:
+            path: /tmp/index.html
+            dest: /tmp/sample.war
+            format: zip
+            mode: "0644"
+          delegate_to: localhost
+          become: false
+
+        - name: Copiar WAR al directorio de despliegue
+          ansible.builtin.copy:
+            src: /tmp/sample.war
+            dest: "{{ wf_install_dir }}/standalone/deployments/sample.war"
+            owner: "{{ wf_user }}"
+            group: "{{ wf_group }}"
+            mode: "0644"
+```
+
+No hace falta poner `roles/wildfly_sample_app/files/` en `src`: Ansible lo localiza solo porque la tarea vive en ese rol.
+
+**Resultado en el nodo:** en el controlador, `/tmp/index.html` (copia del fichero del rol) y `/tmp/sample.war`. En el objetivo, `/opt/wildfly/standalone/deployments/sample.war` con propietario `wildfly`; el contexto `/sample/` sigue sirviendo el mismo HTML.
+
+**Resultado final del bloque (4.5 paso 1 — `files/`):** el HTML de ejemplo vive en `roles/wildfly_sample_app/files/index.html`; el WAR se construye igual que en el paso 15, pero el origen ya no es la raíz del repositorio.
+
+#### Paso 2 — `wildfly.conf` como plantilla Jinja2 en `wildfly_systemd`
+
+Sustituye la copia `remote_src` del `wildfly.conf` de la distribución por un `template` generado desde `roles/wildfly_systemd/templates/wildfly.conf.j2`. Las rutas, el usuario del servicio y la dirección de bind salen de variables del rol (`defaults/main.yml` o `group_vars`).
+
+Contenido de `roles/wildfly_systemd/templates/wildfly.conf.j2`:
+
+```jinja
+# {{ ansible_managed }}
+JBOSS_HOME={{ wildfly_systemd_install_dir }}
+JBOSS_USER={{ wildfly_systemd_user }}
+WILDFLY_CONFIG={{ wildfly_systemd_config }}
+WILDFLY_MODE={{ wildfly_systemd_mode }}
+WILDFLY_BIND={{ wildfly_systemd_bind }}
+```
+
+Valores por defecto típicos en `roles/wildfly_systemd/defaults/main.yml` (ajusta el prefijo si `ansible-lint` exige `var-naming`):
+
+```yaml
+---
+wildfly_systemd_install_dir: "/opt/wildfly"
+wildfly_systemd_user: "wildfly"
+wildfly_systemd_config: standalone.xml
+wildfly_systemd_mode: standalone
+wildfly_systemd_bind: "0.0.0.0"
+```
+
+Tarea que renderiza y notifica a los handlers (sustituye la `copy` remota del `wildfly.conf`):
+
+```yaml
+    - name: Desplegar wildfly.conf desde plantilla Jinja2
+      ansible.builtin.template:
+        src: wildfly.conf.j2
+        dest: /etc/wildfly/wildfly.conf
+        mode: "0644"
+        owner: root
+        group: root
+      notify:
+        - recargar systemd
+        - reiniciar wildfly
+```
+
+`src: wildfly.conf.j2` se resuelve en `templates/` del rol. Si cambias `wildfly_systemd_bind` (u otra variable de la plantilla) y vuelves a ejecutar el play, el fichero cambia y los handlers recargan systemd y reinician WildFly.
+
+**Resultado en el nodo:** `/etc/wildfly/wildfly.conf` generado a partir de la plantilla (comentario `ansible_managed`, `JBOSS_HOME=/opt/wildfly`, `JBOSS_USER=wildfly`, `WILDFLY_BIND=0.0.0.0`, etc.). El servicio `wildfly` usa ese `EnvironmentFile`; un cambio de plantilla provoca reinicio vía handlers.
+
+**Resultado final del bloque (4.5 paso 2 — `templates/`):** la configuración del servicio deja de copiarse desde el tarball y pasa a ser un artefacto del repositorio, parametrizable por variables.
+
+**Resultado final del bloque (§4 — roles):** en disco del objetivo, el mismo resultado que **Resultado final del bloque (§2)** si los roles replican las mismas tareas y variables, con `/etc/wildfly/wildfly.conf` renderizado por Jinja2 y el WAR generado desde `files/index.html`. En el **proyecto**: directorio `roles/` con `tasks/main.yml`, `defaults/main.yml`, y, si aplica, `handlers/main.yml`, `files/` y `templates/`; playbook corto que solo ordena roles y opcionalmente `group_vars` / `vars`.
 
 ---
 
@@ -605,7 +698,7 @@ Los **dos escenarios se pueden definir** en el proyecto. Se diferencian en de d�
 | Escenario | Máquina de prueba | Qué hace `create` / `destroy` | Dónde ejecutarlo |
 | --------- | ----------------- | ----------------------------- | ---------------- |
 | `default` | VM Fedora **generada dentro de OpenShift** (KubeVirt) | `create.yml` da de alta la VM; `destroy.yml` la elimina al terminar. | **Únicamente desde Dev Spaces** (en este curso no se lanza fuera de ese workspace). |
-| `with_existin_machine` | VM Fedora **prearrancada** del laboratorio (la del `inventory`) | No crea ni borra la máquina; solo reutiliza la instancia ya encendida. | Desde Dev Spaces, contra la Fedora del inventario. |
+| `with_existing_machine` | VM Fedora **prearrancada** del laboratorio (la del `inventory`) | No crea ni borra la máquina; solo reutiliza la instancia ya encendida. | Desde Dev Spaces, contra la Fedora del inventario. |
 
 La secuencia de `molecule test` será: `destroy` → `create` → **`prepare`** (`yamllint` y `ansible-lint`) → `converge` → `verify` → `destroy`.
 
@@ -618,7 +711,7 @@ pip install molecule molecule-plugins ansible
 Crea los directorios de ambos escenarios:
 
 ```bash
-mkdir -p molecule/default molecule/with_existin_machine
+mkdir -p molecule/default molecule/with_existing_machine
 ```
 
 Alinea tres cosas en todos los escenarios: `converge.yml` debe importar `deploy-wildfly.yaml` (o el playbook de roles); el inventario de Molecule debe declarar el grupo `servers`; `verify.yml` comprueba el servicio `wildfly`, el puerto **8080** y la URL `/sample/`.
@@ -861,11 +954,11 @@ Comprueba servicio, puerto y aplicación de ejemplo.
 
 **Resultado final del bloque (5.3.1 — escenario `default`):** árbol `molecule/default/` con `molecule.yml`, `molecule_vars.yml`, `create.yml`, `destroy.yml`, `prepare.yml`, `converge.yml` y `verify.yml`.
 
-#### 5.3.2 Escenario `with_existin_machine` — VM del laboratorio
+#### 5.3.2 Escenario `with_existing_machine` — VM del laboratorio
 
 Usa la Fedora que ya configuraste en **Inventario**. Copia `prepare.yml` y `verify.yml` del escenario `default` (mismo lint y mismas aserciones). `converge.yml` es idéntico (importa `deploy-wildfly.yaml`).
 
-##### Paso 8 — `molecule/with_existin_machine/molecule.yml`
+##### Paso 8 — `molecule/with_existing_machine/molecule.yml`
 
 Driver `default` con `managed: false`: Molecule no provisiona instancia. El `ansible_host` debe ser la IP de **tus datos de laboratorio** (la misma que en `inventory`). Los valores `fedora-user1`, `127.0.0.1` y el puerto `2222` del YAML siguiente son **solo un ejemplo** (túnel SSH en Dev Spaces). Si desde el workspace alcanzas la VM directamente, usa esa IP y el puerto 22.
 
@@ -914,7 +1007,7 @@ scenario:
 
 **Resultado en el proyecto:** el grupo `servers` apunta a `fedora-user1` con la misma identidad SSH que el inventario del curso.
 
-##### Paso 9 — `molecule/with_existin_machine/create.yml`
+##### Paso 9 — `molecule/with_existing_machine/create.yml`
 
 ```yaml
 ---
@@ -931,7 +1024,7 @@ scenario:
 
 **Resultado en el nodo:** ninguno; solo un mensaje. La VM del laboratorio sigue igual.
 
-##### Paso 10 — `molecule/with_existin_machine/destroy.yml`
+##### Paso 10 — `molecule/with_existing_machine/destroy.yml`
 
 ```yaml
 ---
@@ -952,17 +1045,17 @@ scenario:
 
 Crea:
 
-- `molecule/with_existin_machine/prepare.yml` — mismo contenido que el **paso 5**.
-- `molecule/with_existin_machine/converge.yml` — mismo contenido que el **paso 6**.
-- `molecule/with_existin_machine/verify.yml` — mismo contenido que el **paso 7**.
+- `molecule/with_existing_machine/prepare.yml` — mismo contenido que el **paso 5**.
+- `molecule/with_existing_machine/converge.yml` — mismo contenido que el **paso 6**.
+- `molecule/with_existing_machine/verify.yml` — mismo contenido que el **paso 7**.
 
-**Resultado final del bloque (5.3.2 — escenario `with_existin_machine`):** árbol `molecule/with_existin_machine/` con `molecule.yml`, `create.yml`, `destroy.yml`, `prepare.yml`, `converge.yml` y `verify.yml`; lint y verificación funcionales idénticos al escenario `default`, sin crear ni destruir la VM del aula.
+**Resultado final del bloque (5.3.2 — escenario `with_existing_machine`):** árbol `molecule/with_existing_machine/` con `molecule.yml`, `create.yml`, `destroy.yml`, `prepare.yml`, `converge.yml` y `verify.yml`; lint y verificación funcionales idénticos al escenario `default`, sin crear ni destruir la VM del aula.
 
 #### 5.3.3 Lanzar los tests de Molecule
 
 Desde la **raíz del proyecto** (junto a `deploy-wildfly.yaml`), en **Dev Spaces**.
 
-- El escenario `with_existin_machine` es el que usas contra la Fedora del laboratorio.
+- El escenario `with_existing_machine` es el que usas contra la Fedora del laboratorio.
 - El escenario `default` se lanza **únicamente desde Dev Spaces** (`molecule test` sin `-s` usa `default`).
 
 ##### Escenario `default` — genera la VM en OpenShift (solo Dev Spaces)
@@ -989,31 +1082,31 @@ molecule destroy -s default
 
 Tras `create`, en OpenShift debe existir la VM `fedora-chocolate-smelt-74`. Tras `destroy`, esa VM ya no debe estar.
 
-##### Escenario `with_existin_machine` — máquina prearrancada
+##### Escenario `with_existing_machine` — máquina prearrancada
 
 No provisiona nada: usa la Fedora que ya está encendida (inventario del laboratorio / túnel SSH). `create` y `destroy` solo confirman que no se crea ni se borra esa instancia.
 
 Ciclo completo:
 
 ```bash
-molecule test -s with_existin_machine
+molecule test -s with_existing_machine
 ```
 
 Paso a paso (depuración):
 
 ```bash
-molecule create -s with_existin_machine
-molecule prepare -s with_existin_machine
-molecule converge -s with_existin_machine
-molecule verify -s with_existin_machine
-molecule destroy -s with_existin_machine
+molecule create -s with_existing_machine
+molecule prepare -s with_existing_machine
+molecule converge -s with_existing_machine
+molecule verify -s with_existing_machine
+molecule destroy -s with_existing_machine
 ```
 
 Tras `destroy`, la VM del laboratorio **sigue arrancada**; Molecule no la apaga.
 
 `molecule prepare` (en ambos escenarios) ejecuta **yamllint** y **ansible-lint** sobre el proyecto (playbook, roles y `group_vars`). Si falla, corrige todos los avisos de 5.1/5.2 (no solo los de la tabla de ejemplos) antes de `converge`.
 
-**Resultado final del bloque (5.3 — Molecule):** los dos escenarios se ejecutan hasta código `0`. En `default`, `molecule test` (o `-s default`) crea la VM en OpenShift, hace lint, converge, verifica `/sample/` y elimina la VM. En `with_existin_machine`, `molecule test -s with_existin_machine` hace lo mismo sobre la máquina prearrancada y la deja intacta al terminar.
+**Resultado final del bloque (5.3 — Molecule):** los dos escenarios se ejecutan hasta código `0`. En `default`, `molecule test` (o `-s default`) crea la VM en OpenShift, hace lint, converge, verifica `/sample/` y elimina la VM. En `with_existing_machine`, `molecule test -s with_existing_machine` hace lo mismo sobre la máquina prearrancada y la deja intacta al terminar.
 
 **Resultado final del bloque (§5 — calidad):** pipeline local repetible: YAML válido (yamllint), buenas prácticas Ansible (ansible-lint) — primero a mano (5.1–5.2) y otra vez **dentro** de Molecule (`prepare`) — y prueba de extremo a extremo alineada con WildFly y `/sample/`.
 
@@ -1080,7 +1173,7 @@ Comportamiento importante: al **verificar** (`gpg-verify`), ansible-sign antepon
 
 Por eso el manifiesto debe:
 
-1. **Incluir** el playbook y el resto de artefactos de automatización que quieras proteger (`deploy-wildfly.yaml`, `index.html`, roles, YAML de Molecule, `group_vars`, etc.).
+1. **Incluir** el playbook y el resto de artefactos de automatización que quieras proteger (`deploy-wildfly.yaml`, roles —incluidos `files/` y `templates/`—, YAML de Molecule, `group_vars`, etc.).
 2. **Excluir** datos propios de tu VM y secretos: `inventory`, clave privada SSH, `molecule/default/molecule_vars.yml` (credenciales de OpenShift).
 3. **Hacer `prune`** de directorios que no deben entrar en la firma: `.git`, `.cache` (Molecule) y, si existe, `.ansible-sign` ya lo ignora la herramienta.
 
@@ -1088,11 +1181,12 @@ Ejemplo orientativo para este ejercicio (ajústalo a tu árbol; si no tienes `ro
 
 ```text
 include deploy-wildfly.yaml
-include index.html
 include README.md
 include .yamllint
 include .ansible-lint
 recursive-include roles *.yml
+recursive-include roles *.html
+recursive-include roles *.j2
 recursive-include molecule *.yml
 recursive-include group_vars *.yml
 prune .git
@@ -1142,7 +1236,7 @@ Más detalle ante errores: `ansible-sign --debug project gpg-verify .`
 1. Este laboratorio se realiza **en OpenShift Dev Spaces**. Configura el fichero `inventory` de esta carpeta con el host de tu VM Fedora según **tus datos de acceso de laboratorio** (los valores de IP de esta guía son solo un ejemplo; véase la sección **Inventario** anterior a la sección 2).
 2. **Crea** `deploy-wildfly.yaml` copiando los fragmentos de la sección 2 (el fichero no viene en el repositorio).
 3. Refactoriza con `tags` y `block` (sección 3).
-4. Extrae a roles, centraliza variables y añade handlers (sección 4).
+4. Extrae a roles, centraliza variables, añade handlers y usa `files/` y `templates/` (sección 4).
 5. Valida con yamllint, ansible-lint (playbook + roles + `group_vars`) y Molecule (sección 5). El escenario `default` solo desde Dev Spaces.
 6. Crea `MANIFEST.in` (sección 6.3), firma el proyecto con `ansible-sign` y comprueba la firma con `ansible-sign project gpg-verify` (sección 6), usando la frase de paso común del laboratorio.
 
