@@ -1,6 +1,19 @@
 # lab-devspaces-ansible-exercise1
 
-Curso práctico de desarrollo de playbooks Ansible. **Este ejercicio está pensado para realizarse dentro de OpenShift Dev Spaces** (el workspace del laboratorio ya incluye Ansible, Molecule 25.5.x, ansible-lint, yamllint, `oc` y ansible-sign). La VM Fedora del aula es alcanzable por SSH desde ese workspace.
+Curso práctico de desarrollo de playbooks Ansible. **Este ejercicio está pensado para realizarse dentro de OpenShift Dev Spaces**. La VM Fedora del aula es alcanzable por SSH desde ese workspace.
+
+Versiones de la imagen (compruébalas con `python3 --version`, `ansible --version`, `molecule --version`, `yamllint --version`, `ansible-lint --version`):
+
+| Herramienta | Versión en Dev Spaces |
+| ----------- | --------------------- |
+| Python | **3.12** |
+| ansible-core | **2.21.x** |
+| yamllint | **1.38.x** |
+| ansible-lint | **26.x** (p. ej. 26.6.0) |
+| Molecule | **26.x** (p. ej. 26.6.0); driver **`default`** (no existe `delegated`) |
+| ansible-sign, `oc` | Incluidos en la imagen |
+
+No hace falta instalar estas herramientas a mano en el workspace. `pip install yamllint` / `ansible-lint` / `molecule` de más abajo solo aplica si alguna faltara.
 
 **El repositorio no incluye `deploy-wildfly.yaml`.** Debes **crearlo tú** en la raíz del proyecto (mismo nivel que este README) copiando y ensamblando los fragmentos YAML de las secciones siguientes. Este documento es la guía para construirlo, refactorizarlo y validarlo con herramientas de calidad.
 
@@ -585,7 +598,7 @@ Corrige **todos** los avisos (los de la tabla y el resto que salgan) en playbook
 
 Molecule ejecuta el playbook contra un entorno de prueba y un playbook de verificación. En este ejercicio creas **tú** el árbol `molecule/` (no viene hecho en el repositorio).
 
-La imagen de Dev Spaces incluye **Molecule 25.5.0**. En esa versión el driver se llama `default` (el nombre antiguo `delegated` **ya no existe**; si lo usas, `molecule` falla al cargar los escenarios).
+La imagen de Dev Spaces incluye **Molecule 26.x** (p. ej. 26.6.0) con ansible-core **2.21**. El driver se llama `default` (el nombre antiguo `delegated` **ya no existe**; si lo usas, `molecule` falla al cargar los escenarios).
 
 Los **dos escenarios se pueden definir** en el proyecto. Se diferencian en de dónde sale la máquina:
 
@@ -616,7 +629,7 @@ Este escenario se ejecuta **únicamente desde Dev Spaces**.
 
 ##### Paso 1 — `molecule/default/molecule.yml`
 
-Define el driver `default` (Molecule 25.5.0 en la imagen del laboratorio), plataforma, inventario del grupo `servers` y la secuencia de test con `prepare` (lint).
+Define el driver `default` (Molecule 26.x en la imagen del laboratorio), plataforma, inventario del grupo `servers` y la secuencia de test con `prepare` (lint).
 
 ```yaml
 ---
