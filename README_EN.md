@@ -754,7 +754,7 @@ You can **define both scenarios** in the project. They differ in where the machi
 
 | Scenario | Test machine | What `create` / `destroy` do | Where to run it |
 | -------- | ------------ | ---------------------------- | --------------- |
-| `default` | Fedora VM **created inside OpenShift** (KubeVirt) | `create.yml` provisions the VM; `destroy.yml` removes it at the end. | **Only from Dev Spaces**. This is **optional and advanced**: the sample YAML is **not** enough if copied as-is (see 5.3.1). |
+| `default` | Fedora VM **created inside OpenShift** (KubeVirt), `fedora-mol-<user>` | `create.yml` provisions the VM (cloud-init and SSH key); `destroy.yml` removes it at the end. | **Only from Dev Spaces**, after you replace the API URL, user, password, and namespace `virtualization-test-<user>` (see 5.3.1). |
 | `with_existing_machine` | **Pre-started** lab Fedora VM (the one in `inventory`) | Does not create or delete the machine; reuses the instance already running. | From Dev Spaces, against the inventory Fedora. **This is the scenario you must complete** in class. |
 
 The `molecule test` sequence is: `destroy` → `create` → **`prepare`** (`yamllint` and `ansible-lint`) → `converge` → `verify` → `destroy`.
@@ -775,20 +775,23 @@ Keep three things aligned in every scenario: `converge.yml` must import `deploy-
 
 #### 5.3.1 Scenario `default` — test VM on OpenShift
 
-This scenario is run **only from Dev Spaces**. The YAML in the steps below is a **skeleton**: if you copy it without adapting it, `molecule test` will **not** leave a Fedora VM reachable over SSH.
+This scenario runs **only from Dev Spaces**. It creates a new Fedora VM with KubeVirt, injects the lab public key through cloud-init, waits for the VMI IP, and applies the playbook over SSH. The YAML in the steps below is what makes the VM reachable: replace only the placeholders in the table.
 
-Common traps if you paste it as-is:
+| Placeholder | Where | Value to put |
+| ----------- | ----- | ------------ |
+| `<user>` | Platform name in `molecule.yml` (all three places) and the path `/tmp/molecule-default-<user>.ip` in `molecule.yml` and `create.yml` | Your lab username, **the same** in every place. If you are `user2`, the VM is `fedora-mol-user2` and the file is `/tmp/molecule-default-user2.ip`. |
+| `ocp_url` | `molecule_vars.yml` | API URL, in the form `https://api.tu-cluster.com:6443` |
+| `ocp_user` | `molecule_vars.yml` | `<lab_username>` (the same user as `<user>`) |
+| `ocp_pass` | `molecule_vars.yml` | `<lab_password>` |
+| `ocp_namespace` | `molecule_vars.yml` | `virtualization-test-<lab_username>` |
 
-- `namespace: my-namespace` **does not exist**. Use the project where your user can create VMs (in class this is often `virtualization-test-<your-user>`, not a placeholder).
-- `wait_for` with `host: localhost` waits for SSH **on the workspace**, not on the VMI. `item.address` is empty unless you fill in the IP yourself. Get the IP with `oc get vmi` and set it in `host_vars` as `ansible_host`.
-- The image `quay.io/containerdisks/fedora:latest` **does not include** the `id_fedora_new` key and is not guaranteed to use `ansible_user: fedora` (in this lab the account is `user1`). Without injecting cloud-init/a key, `converge` cannot log in.
-- `molecule_vars.yml` holds OpenShift username and password: **do not** push it to Gitea or any public remote. Exclude it from `MANIFEST.in`.
+The first step of `molecule test` is `destroy`, so `molecule_vars.yml` must be filled in before any command of this scenario. That file holds the OpenShift username and password: **do not** push it to Gitea or any public remote. Exclude it from `MANIFEST.in`.
 
-The scenario you can finish end to end in class is `with_existing_machine` (5.3.2). Use `default` only if the instructor gives you a real KubeVirt VM IP, SSH user, and namespace.
+Cloud-init installs `ssh_tests_connections/id_fedora_new.pub` (it ships in the repository). The SSH user of this VM is `fedora`, the user of the `quay.io/containerdisks/fedora` image. The platform is named `fedora-mol-<user>` and lives in `virtualization-test-<user>`, the same project as the inventory Fedora (`fedora-<user>`). `destroy` removes only `fedora-mol-<user>`.
 
 ##### Step 1 — `molecule/default/molecule.yml`
 
-Define the `default` driver (Molecule 26.x in the lab image), platform, `servers` group inventory, and the test sequence including `prepare` (lint).
+Define the `default` driver (Molecule 26.x in the lab image), the platform, the `servers` group inventory, and the test sequence including `prepare` (lint). `ansible_host` reads the IP that `create.yml` writes.
 
 ```yaml
 ---
@@ -797,19 +800,27 @@ dependency:
 driver:
   name: default
 platforms:
-  - name: fedora-chocolate-smelt-74
+  - name: fedora-mol-<user>
 provisioner:
   name: ansible
+  config_options:
+    defaults:
+      roles_path: ${MOLECULE_PROJECT_DIRECTORY}/roles
+      collections_path: ~/.ansible/collections
+      host_key_checking: false
+      interpreter_python: auto_silent
   inventory:
     hosts:
       all:
         children:
           servers:
             hosts:
-              fedora-chocolate-smelt-74: {}
+              fedora-mol-<user>: {}
     host_vars:
-      fedora-chocolate-smelt-74:
+      fedora-mol-<user>:
         ansible_user: fedora
+        ansible_host: "{{ lookup('ansible.builtin.file', '/tmp/molecule-default-<user>.ip', errors='ignore') | default('127.0.0.1', true) | trim }}"
+        ansible_ssh_private_key_file: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/ssh_tests_connections/id_fedora_new"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
 verifier:
   name: ansible
@@ -823,25 +834,39 @@ scenario:
     - destroy
 ```
 
-**Result in the project:** Molecule recognizes the `default` scenario; the play `hosts: servers` resolves to the test host.
+**Result in the project:** Molecule recognizes the `default` scenario; the play `hosts: servers` resolves to `fedora-mol-<user>`. `roles_path` and `collections_path` let `converge` find the project roles and the KubeVirt collections.
 
 ##### Step 2 — `molecule/default/molecule_vars.yml`
 
-OpenShift credentials for `create.yml` / `destroy.yml`. Replace URL, user, and password with those from your assignment (lab Excel). **Do not** push real secrets to a public remote.
+OpenShift credentials for `create.yml` and `destroy.yml`. Replace the four values with those from your assignment (lab Excel). **Do not** push real secrets to a public remote.
 
 ```yaml
 ---
 ocp_url: "https://api.tu-cluster.com:6443"
 ocp_user: "<lab_username>"
 ocp_pass: "<lab_password>"
-ocp_namespace: "<namespace_with_VM_permissions>"
+ocp_namespace: "virtualization-test-<lab_username>"
 ```
 
-Replace the three placeholders with **your** data (OpenShift API, lab username/password, namespace where you can create VirtualMachines). **Do not** push this file to a public remote.
+The namespace follows the form `virtualization-test-<lab_username>` (the project where your user can create VirtualMachines). **Do not** push this file to a public remote.
+
+##### Collections — `molecule/default/requirements.yml`
+
+Molecule installs this file in the `dependency` step (Galaxy), before `create`. It is required for `kubevirt.core.kubevirt_vm` and for deleting the Service in `destroy.yml`.
+
+```yaml
+---
+collections:
+  - name: kubevirt.core
+  - name: kubernetes.core
+  - name: community.general
+```
+
+**Result in the project:** `molecule test` installs the three collections under `~/.ansible/collections` (the path set in `molecule.yml`).
 
 ##### Step 3 — `molecule/default/create.yml`
 
-Creates the Fedora VM with KubeVirt and waits for SSH. Requires authenticated `oc` and the `kubevirt.core` / `kubernetes.core` collections.
+Logs in to OpenShift, creates the VM with a Fedora disk and cloud-init (SSH key), waits until the VMI has an IP, saves it for `converge`, and waits for port 22.
 
 ```yaml
 ---
@@ -850,13 +875,16 @@ Creates the Fedora VM with KubeVirt and waits for SSH. Requires authenticated `o
   gather_facts: false
   vars_files:
     - molecule_vars.yml
-  vars:
-    password: "{{ ocp_pass | default(omit) }}"
   tasks:
     - name: Log in to OpenShift
       ansible.builtin.command:
-        cmd: oc login --insecure-skip-tls-verify -u {{ ocp_user }} -p {{ password }} {{ ocp_url }}
+        cmd: >-
+          oc login --insecure-skip-tls-verify=false
+          --username {{ ocp_user }}
+          --password {{ ocp_pass }}
+          {{ ocp_url }}
       changed_when: false
+      no_log: true
 
     - name: Get OpenShift API token
       ansible.builtin.command:
@@ -868,46 +896,76 @@ Creates the Fedora VM with KubeVirt and waits for SSH. Requires authenticated `o
       kubevirt.core.kubevirt_vm:
         host: "{{ ocp_url }}"
         api_key: "{{ token.stdout }}"
+        validate_certs: true
         state: present
+        run_strategy: Always
+        wait: true
+        wait_timeout: 600
         namespace: "{{ ocp_namespace }}"
         name: "{{ item.name }}"
         spec:
-          running: true
-          template:
-            spec:
-              domain:
-                devices:
-                  interfaces:
-                    - name: default
-                      masquerade: {}
-                  disks:
-                    - name: containerdisk
-                      disk: {bus: virtio}
-                resources:
-                  requests:
-                    memory: 2Gi
-              volumes:
+          domain:
+            resources:
+              requests:
+                memory: 4Gi
+            devices:
+              interfaces:
+                - name: default
+                  masquerade: {}
+              disks:
                 - name: containerdisk
-                  containerDisk:
-                    image: quay.io/containerdisks/fedora:latest
+                  disk:
+                    bus: virtio
+                - name: cloudinit
+                  disk:
+                    bus: virtio
+          networks:
+            - name: default
+              pod: {}
+          volumes:
+            - name: containerdisk
+              containerDisk:
+                image: quay.io/containerdisks/fedora:latest
+            - name: cloudinit
+              cloudInitNoCloud:
+                userData: |
+                  #cloud-config
+                  ssh_authorized_keys:
+                    - {{ lookup('ansible.builtin.file', playbook_dir + '/../../ssh_tests_connections/id_fedora_new.pub') | trim }}
       loop: "{{ molecule_yml.platforms }}"
 
-    - name: Wait for SSH to be ready
+    - name: Wait until the VMI has an IP
+      ansible.builtin.command:
+        cmd: >-
+          oc get vmi {{ molecule_yml.platforms[0].name }}
+          -n {{ ocp_namespace }}
+          -o jsonpath={.status.interfaces[0].ipAddress}
+      register: vmi_ip
+      changed_when: false
+      retries: 36
+      delay: 10
+      until: vmi_ip.stdout is match('([0-9]{1,3}\.){3}[0-9]{1,3}')
+
+    - name: Save the VMI IP for converge
+      ansible.builtin.copy:
+        dest: /tmp/molecule-default-<user>.ip
+        content: "{{ vmi_ip.stdout | trim }}\n"
+        mode: "0644"
+
+    - name: Wait for SSH on the VMI
       ansible.builtin.wait_for:
-        host: "{{ item.address }}"
+        host: "{{ vmi_ip.stdout | trim }}"
         port: 22
         timeout: 300
-      loop: "{{ molecule_yml.platforms }}"
-      when: item.address is defined
 ```
 
-`item.address` is **not filled in automatically**. After creating the VM, look up the VMI IP (`oc get vmi -n {{ ocp_namespace }}`) and set it in `host_vars` as `ansible_host` (and the real SSH user; do not assume `fedora`). A `wait_for` against `localhost` waits 300 s and fails: the workspace is not the Fedora VM. Without a node reachable over SSH, `converge` cannot apply the playbook.
+`create.yml` reads the IP with `oc get vmi` and writes it to `/tmp/molecule-default-<user>.ip`. That path must match the `ansible_host` lookup in `molecule.yml`. Memory is **4Gi**: with less, WildFly may never listen on port 8080. `no_log` keeps the `oc login` password out of the output.
 
-**Result on OpenShift:** VM `fedora-chocolate-smelt-74` present in **your** namespace; SSH on port 22 **only** if you injected a key/user and filled in `ansible_host`.
+**Result on OpenShift:** VM `fedora-mol-<user>` running in `virtualization-test-<lab_username>`, with `id_fedora_new.pub` installed for user `fedora` and SSH on port 22.
 
 ##### Step 4 — `molecule/default/destroy.yml`
 
-Removes the VM and, optionally, an associated Service.
+Logs in again (Molecule runs `destroy` as a separate playbook) and removes the VM and the associated Service.
 
 ```yaml
 ---
@@ -917,30 +975,48 @@ Removes the VM and, optionally, an associated Service.
   vars_files:
     - molecule_vars.yml
   tasks:
+    - name: Log in to OpenShift
+      ansible.builtin.command:
+        cmd: >-
+          oc login --insecure-skip-tls-verify=false
+          --username {{ ocp_user }}
+          --password {{ ocp_pass }}
+          {{ ocp_url }}
+      changed_when: false
+      no_log: true
+
+    - name: Get OpenShift API token
+      ansible.builtin.command:
+        cmd: oc whoami --show-token
+      register: token
+      changed_when: false
+
     - name: Remove Fedora VM from OpenShift
       kubevirt.core.kubevirt_vm:
         host: "{{ ocp_url }}"
+        api_key: "{{ token.stdout }}"
+        validate_certs: true
         state: absent
-        namespace: "{{ ocp_namespace }}"
-        name: "{{ item.name }}"
         wait: true
         wait_timeout: 300
+        namespace: "{{ ocp_namespace }}"
+        name: "{{ item.name }}"
       loop: "{{ molecule_yml.platforms }}"
       ignore_errors: true
 
-    - name: Clean up associated resources
+    - name: Clean up associated Service
       kubernetes.core.k8s:
         host: "{{ ocp_url }}"
+        api_key: "{{ token.stdout }}"
+        validate_certs: true
         state: absent
         namespace: "{{ ocp_namespace }}"
-        kind: "{{ item.kind }}"
-        name: "{{ item.name }}"
-      loop:
-        - {kind: Service, name: "svc-{{ molecule_yml.platforms[0].name }}"}
+        kind: Service
+        name: "svc-{{ molecule_yml.platforms[0].name }}"
       ignore_errors: true
 ```
 
-**Result on OpenShift:** the test VM (and the Service if it existed) are gone; `ignore_errors` keeps the scenario from failing if the VM was never created.
+**Result on OpenShift:** the test VM and the Service `svc-fedora-mol-<user>`, if it existed, are gone. `ignore_errors` lets the scenario continue if the VM was never created.
 
 ##### Step 5 — `molecule/default/prepare.yml` (yamllint and ansible-lint)
 
@@ -1006,21 +1082,21 @@ Check service, port, and sample application.
     - name: Wait for WildFly to listen on port 8080
       ansible.builtin.wait_for:
         port: 8080
-        timeout: 60
+        timeout: 120
 
     - name: Verify application sample.war is accessible
       ansible.builtin.uri:
         url: http://localhost:8080/sample/
         status_code: 200
       register: app_check
-      retries: 5
+      retries: 8
       delay: 10
       until: app_check.status == 200
 ```
 
-**Result on the node:** `wildfly` active, port 8080 listening, and HTTP 200 on `/sample/`.
+**Result on the node:** `wildfly` active, port 8080 listening, and HTTP 200 on `/sample/`. The wait is 120 s with up to 8 retries: on a freshly created VM, WildFly takes longer to publish `/sample/`.
 
-**Final result of this block (5.3.1 — `default` scenario):** `molecule/default/` tree with `molecule.yml`, `molecule_vars.yml`, `create.yml`, `destroy.yml`, `prepare.yml`, `converge.yml`, and `verify.yml`.
+**Final result of this block (5.3.1 — `default` scenario):** `molecule/default/` tree with `molecule.yml`, `molecule_vars.yml`, `requirements.yml`, `create.yml`, `destroy.yml`, `prepare.yml`, `converge.yml`, and `verify.yml`.
 
 #### 5.3.2 Scenario `with_existing_machine` — lab VM
 
@@ -1116,7 +1192,7 @@ Create:
 - `molecule/with_existing_machine/prepare.yml` — same content as **step 5**.
 - `molecule/with_existing_machine/converge.yml` — same content as **step 6**.
 - `molecule/with_existing_machine/verify.yml` — same content as **step 7**.
-- `molecule/with_existing_machine/requirements.yml` — at least `community.general` (Molecule Galaxy installs it in `dependency`). A project-level `requirements.yml` with `kubevirt.core` is only needed if you run the `default` scenario.
+- `molecule/with_existing_machine/requirements.yml` — at least `community.general` (Molecule Galaxy installs it in `dependency`). The KubeVirt collections belong in `molecule/default/requirements.yml` (section 5.3.1), not at the project root.
 
 **Final result of this block (5.3.2 — `with_existing_machine` scenario):** `molecule/with_existing_machine/` tree with `molecule.yml`, `create.yml`, `destroy.yml`, `prepare.yml`, `converge.yml`, and `verify.yml`; lint and functional checks identical to `default`, without creating or destroying the classroom VM.
 
@@ -1125,13 +1201,29 @@ Create:
 From the **project root** (next to `deploy-wildfly.yaml`), in **Dev Spaces**.
 
 - `with_existing_machine` is the scenario you run against the lab Fedora (**required** in class).
-- `default` is run **only from Dev Spaces** and only after you have adapted namespace, VMI IP, and SSH (`molecule test` without `-s` uses `default` and will fail if the skeleton is still literal).
+- `default` runs **only from Dev Spaces** after you have replaced `<user>`, `ocp_url`, `ocp_user`, `ocp_pass`, and `ocp_namespace` (`molecule test` without `-s` uses `default`).
 
-Default scenario (`default`, creates/destroys an OpenShift VM; **Dev Spaces only**):
+Default scenario (`default`, creates and destroys an OpenShift VM; **Dev Spaces only**). `molecule_vars.yml` must contain the API URL, user, password, and namespace `virtualization-test-<lab_username>`.
+
+Full cycle:
 
 ```bash
 molecule test
+# equivalent:
+molecule test -s default
 ```
+
+Step by step (debugging):
+
+```bash
+molecule create -s default
+molecule prepare -s default
+molecule converge -s default
+molecule verify -s default
+molecule destroy -s default
+```
+
+After `create`, VM `fedora-mol-<user>` must exist in `virtualization-test-<lab_username>`. After `destroy`, that VM must be gone. The inventory Fedora stays in the same project.
 
 Classroom scenario (existing VM; the one you should use in the lab):
 
@@ -1151,7 +1243,7 @@ molecule destroy -s with_existing_machine
 
 `molecule prepare` is the step that runs **yamllint** and **ansible-lint** on the project (playbook, roles, and `group_vars`). If it fails, fix all warnings from 5.1/5.2 (not only those in the example table) before `converge`.
 
-**Final result of this block (5.3 — Molecule):** both scenarios created on disk; `molecule test -s with_existing_machine` completes `destroy` → `create` → `prepare` (lint) → `converge` → `verify` → `destroy` with exit code `0`; the playbook is applied on the lab VM and `verify.yml` confirms service, port, and URL. The `default` scenario only succeeds after you adapt namespace, VMI IP, and SSH (it will not work if copied literally).
+**Final result of this block (5.3 — Molecule):** both scenarios are defined on disk. `molecule test -s with_existing_machine` completes `destroy` → `create` → `prepare` (lint) → `converge` → `verify` → `destroy` with exit code `0` on the classroom Fedora and leaves it running. `molecule test -s default` reaches exit code `0` after you replace `<user>`, the API URL, the user, the password, and the namespace `virtualization-test-<lab_username>`: it creates `fedora-mol-<user>`, deploys WildFly, and deletes that VM at the end.
 
 **Final result of this block (§5 — quality):** repeatable local pipeline: valid YAML (yamllint), Ansible best practices (ansible-lint) — first by hand (5.1–5.2) and again **inside** Molecule (`prepare`) — and an end-to-end test aligned with WildFly and `/sample/`.
 
@@ -1298,7 +1390,7 @@ More detail on errors: `ansible-sign --debug project gpg-verify .`
 2. **Create** `deploy-wildfly.yaml` by copying the snippets from section 2 (the file is not in the repository).
 3. Refactor with `tags` and `block` (section 3).
 4. Extract to roles, centralize variables, add handlers, and use `files/` and `templates/` (section 4).
-5. Validate with yamllint, ansible-lint (playbook + roles + `group_vars`), and Molecule (section 5). Complete **`molecule test -s with_existing_machine`** against your Fedora. The `default` (KubeVirt) scenario is optional and does not work if copied as-is.
+5. Validate with yamllint, ansible-lint (playbook + roles + `group_vars`), and Molecule (section 5). Complete **`molecule test -s with_existing_machine`** against your Fedora. The `default` scenario creates another Fedora in `virtualization-test-<lab_username>`: replace `<user>`, `ocp_url`, `ocp_user`, `ocp_pass`, and `ocp_namespace` before **`molecule test -s default`**.
 6. Create `MANIFEST.in` (section 6.3), sign the project with `ansible-sign`, and check the signature with `ansible-sign project gpg-verify` (section 6), using the shared lab passphrase.
 
 The practice is to build the playbook, improve it structurally, and demonstrate quality with the tools above.
