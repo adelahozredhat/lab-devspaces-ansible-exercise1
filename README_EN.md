@@ -797,6 +797,8 @@ Define the `default` driver (Molecule 26.x in the lab image), the platform, the 
 ---
 dependency:
   name: galaxy
+  options:
+    requirements-file: requirements.yml
 driver:
   name: default
 platforms:
